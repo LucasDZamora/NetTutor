@@ -1,21 +1,23 @@
-import { useEffect, useState } from 'react'
-import axios from 'axios'
+import React, { useState } from 'react';
+import Navbar from './components/Navbar';
+import AnalysisView from './components/AnalysisView';
+import ChatView from './components/ChatView';
+import SimulatorView from './components/SimulatorView';
 
 function App() {
-  const [data, setData] = useState('')
-
-  useEffect(() => {
-    axios.get('http://localhost:8000/')
-      .then(res => setData(res.data.message))
-      .catch(err => console.error(err))
-  }, [])
+  const [activeView, setActiveView] = useState('analysis');
 
   return (
-    <div>
-      <h1>Frontend en React</h1>
-      <p>Respuesta del servidor: {data}</p>
+    <div className="h-screen flex flex-col overflow-hidden bg-gray-100">
+      <Navbar activeView={activeView} switchView={setActiveView} />
+      
+      <main className="flex-1 overflow-hidden relative">
+        {activeView === 'analysis' && <AnalysisView />}
+        {activeView === 'chat' && <ChatView />}
+        {activeView === 'sim' && <SimulatorView />}
+      </main>
     </div>
-  )
+  );
 }
 
-export default App
+export default App;
