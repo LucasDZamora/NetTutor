@@ -67,7 +67,6 @@ Para que el proyecto completo funcione, necesitas **dos terminales abiertas**:
 **Terminal 1 (Backend):**
 ```powershell
 cd backend
-.\venv\Scripts\activate
 python -m uvicorn main:app --reload
 ```
 
