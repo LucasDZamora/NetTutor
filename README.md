@@ -27,7 +27,6 @@ El backend requiere Python instalado en tu sistema. Se recomienda encarecidament
 ### ¿Cómo ejecutar el servidor Backend en el día a día?
 Cada vez que vayas a trabajar en el proyecto, abre tu terminal, navega a la carpeta `backend`, activa tu entorno y ejecuta:
 ```powershell
-.\venv\Scripts\activate
 python -m uvicorn main:app --reload
 ```
 El backend estará corriendo en: `http://localhost:8000` (o el puerto que te indique la terminal).
