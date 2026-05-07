@@ -33,6 +33,11 @@ El backend estará corriendo en: `http://localhost:8000` (o el puerto que te ind
 
 ---
 
+### Comando para crear requirements.txt
+```powershell
+python -m pip freeze > requirements.txt
+```
+
 ## 🎨 2. Configuración del Frontend (React/Vite)
 
 El frontend requiere tener instalado [Node.js](https://nodejs.org/) en tu computadora.
