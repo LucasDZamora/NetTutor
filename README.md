@@ -10,7 +10,7 @@ A continuación, se detallan las instrucciones paso a paso para configurar y eje
 
 ## 🚀 1. Configuración del Backend (Python/FastAPI)
 
-El backend requiere Python instalado en tu sistema. Se recomienda encarecidamente utilizar un entorno virtual para aislar las dependencias del proyecto.
+El backend requiere Python instalado en tu sistema.
 
 ### Pasos para la primera vez:
 
