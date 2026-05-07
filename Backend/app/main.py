@@ -1,6 +1,12 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import os
+from dotenv import load_dotenv
+
+# Buscamos el .env subiendo dos niveles: de 'app' a 'backend' y de 'backend' a la raíz
+dotenv_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
+load_dotenv(dotenv_path=dotenv_path)
+app = FastAPI(title="Cybersecurity Tutor API")
 import shutil
 
 # Importamos los modelos y servicios
@@ -8,7 +14,6 @@ from app.models.schemas import ChatRequest
 from app.services.agent import get_tutor_response
 from app.services.analyzer import analyze_pcap
 
-app = FastAPI(title="Cybersecurity Tutor API")
 
 # Configuración de CORS
 origins = [

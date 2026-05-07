@@ -27,7 +27,7 @@ REGLAS:
 def get_tutor_response(user_message: str, pcap_data: dict = None):
     # 1. Identificar Tópico (Sustitución de Dialogflow)
     intent_response = client.chat.completions.create(
-        model="llama-3.1-70b-versatile", # O tu modelo de 120B preferido
+        model="llama-3.3-70b-versatile", # O tu modelo de 120B preferido
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT_INTENT},
             {"role": "user", "content": user_message}
@@ -52,13 +52,19 @@ def get_tutor_response(user_message: str, pcap_data: dict = None):
     {user_message}
     """
 
-    final_response = client.chat.completions.create(
-        model="llama-3.1-70b-versatile",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT_TUTOR},
-            {"role": "user", "content": full_prompt}
-        ],
-        temperature=0.2 # Baja temperatura para mayor precisión técnica
-    )
+    try:
+        final_response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT_TUTOR},
+                {"role": "user", "content": full_prompt}
+            ],
+            temperature=0.2 # Baja temperatura para respuestas más técnicas y precisas
+        )
+    except Exception as e:
+        raise RuntimeError(f"Intent classification failed: {e}")
+
+    if not final_response.choices:
+        raise RuntimeError("No choices returned from intent model")
 
     return final_response.choices[0].message.content
