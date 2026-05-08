@@ -21,7 +21,3 @@ venv/
 # Build
 dist/
 build/
-
-# Data
-data/chroma_db/
-data/captures/
