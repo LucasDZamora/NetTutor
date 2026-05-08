@@ -1,19 +1,27 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import os
+import shutil
 from dotenv import load_dotenv
+from pydantic import BaseModel # Para validar el cuerpo del login
 
-# Buscamos el .env subiendo dos niveles: de 'app' a 'backend' y de 'backend' a la raíz
+# Buscamos el .env subiendo dos niveles
 dotenv_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
 load_dotenv(dotenv_path=dotenv_path)
-app = FastAPI(title="Cybersecurity Tutor API")
-import shutil
 
-# Importamos los modelos y servicios
+app = FastAPI(title="Cybersecurity Tutor API")
+
+# --- Modelos de Datos ---
 from app.models.schemas import ChatRequest
+
+class LoginRequest(BaseModel):
+    nombre: str
+    password: str
+
+# --- Importamos Servicios ---
 from app.services.agent import get_tutor_response
 from app.services.analyzer import analyze_pcap
-
+from app.services.auth_service import validar_credenciales # El servicio que creamos
 
 # Configuración de CORS
 origins = [
@@ -37,9 +45,20 @@ os.makedirs(CAPTURES_DIR, exist_ok=True)
 def read_root():
     return {"message": "Tutor de Ciberseguridad Activo"}
 
+# --- Endpoint de Autenticación (Migrado desde LoginModal.jsx) ---
+@app.post("/api/login")
+async def login_endpoint(credentials: LoginRequest):
+    """Lógica de login que antes estaba en el Frontend"""
+    user = validar_credenciales(credentials.nombre, credentials.password)
+    
+    if not user:
+        raise HTTPException(status_code=401, detail="Credenciales incorrectas")
+    
+    return {"status": "success", "user": user}
+
+# --- Endpoints de Tutoría y Análisis ---
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
-    """Endpoint para consultas de texto puro (RAG)"""
     try:
         response = get_tutor_response(request.message)
         return {"status": "success", "response": response}
@@ -48,22 +67,17 @@ async def chat_endpoint(request: ChatRequest):
 
 @app.post("/api/analyze")
 async def analyze_endpoint(file: UploadFile = File(...)):
-    """Endpoint para subir PCAP, analizar con Scapy y generar tutoría con RAG"""
     file_path = os.path.join(CAPTURES_DIR, file.filename)
     
     try:
-        # 1. Guardar archivo
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        # 2. Analizar con Scapy
         pcap_data = analyze_pcap(file_path)
         
         if isinstance(pcap_data, str) and "Error" in pcap_data:
             return {"status": "error", "message": pcap_data}
             
-        # 3. Generar respuesta del tutor combinando Scapy + RAG
-        # Usamos un mensaje inicial para disparar la narrativa del archivo
         user_msg = f"He subido el archivo {file.filename}. ¿Qué ataques o anomalías detectas?"
         narrative = get_tutor_response(user_msg, pcap_data=pcap_data)
         
@@ -73,6 +87,5 @@ async def analyze_endpoint(file: UploadFile = File(...)):
             "technical_details": pcap_data
         }
     finally:
-        # Limpieza: eliminar el archivo después del análisis si no se desea persistir
         if os.path.exists(file_path):
             os.remove(file_path)
