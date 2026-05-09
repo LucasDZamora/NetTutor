@@ -8,6 +8,13 @@ A continuación, se detallan las instrucciones paso a paso para configurar y eje
 
 ---
 
+## Crear .env 
+   ```powershell
+   copy .env.copy .env
+   ```
+
+
+
 ## 🚀 1. Configuración del Backend (Python/FastAPI)
 
 El backend requiere Python instalado en tu sistema.
