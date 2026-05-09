@@ -4,6 +4,7 @@ export default function Navbar({
   activeView,
   switchView,
   onLoginClick,
+  onRegisterClick, // <-- Agregamos esta prop
   user,
   onLogout
 }) {
@@ -68,7 +69,11 @@ export default function Navbar({
               Iniciar Sesión
             </button>
 
-            <button className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm hover:bg-slate-900 transition-all">
+            {/* AHORA EL BOTÓN EJECUTA LA FUNCIÓN */}
+            <button 
+              onClick={onRegisterClick}
+              className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm hover:bg-slate-900 transition-all"
+            >
               Registrarse
             </button>
           </>

@@ -4,10 +4,12 @@ import AnalysisView from './components/AnalysisView';
 import ChatView from './components/ChatView';
 import SimulatorView from './components/SimulatorView';
 import LoginModal from './components/LoginModal';
+import RegisterModal from './components/RegisterModal'; // Importar el nuevo modal
 
 function App() {
   const [activeView, setActiveView] = useState('analysis');
   const [showLoginModal, setShowLoginModal] = useState(false);
+  const [showRegisterModal, setShowRegisterModal] = useState(false); // Estado para el registro
   
   const [user, setUser] = useState(() => {
     const savedUser = localStorage.getItem("user");
@@ -32,6 +34,7 @@ function App() {
         activeView={activeView}
         switchView={setActiveView}
         onLoginClick={() => setShowLoginModal(true)}
+        onRegisterClick={() => setShowRegisterModal(true)} // Nueva prop para el Navbar
         user={user}
         onLogout={handleLogout}
       />
@@ -40,6 +43,17 @@ function App() {
         <LoginModal
           onClose={() => setShowLoginModal(false)}
           onLoginSuccess={handleLoginSuccess}
+        />
+      )}
+
+      {/* Nuevo componente de registro */}
+      {showRegisterModal && (
+        <RegisterModal
+          onClose={() => setShowRegisterModal(false)}
+          onSwitchToLogin={() => {
+            setShowRegisterModal(false);
+            setShowLoginModal(true);
+          }}
         />
       )}
 
