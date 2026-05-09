@@ -1,14 +1,27 @@
 import os
+import re
 from groq import Groq
+
 from app.services.rag_service import RAGService
 
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-rag = RAGService()
+
+rag = None
+
+ALLOWED_TOPICS = {
+    "port_scan",
+    "telnet",
+    "pop3",
+    "malware_c2",
+    "dos",
+    "http_phishing",
+    "general",
+}
 
 SYSTEM_PROMPT_INTENT = """
 Eres un clasificador de intenciones experto en ciberseguridad.
 Tu tarea es analizar la consulta del usuario y determinar cuál de los 5 niveles de ataque está involucrado.
-Responde ÚNICAMENTE con el nombre del tópico: 
+Responde ÚNICAMENTE con el nombre del tópico:
 'port_scan', 'telnet', 'pop3', 'malware_c2', 'dos', 'http_phishing', o 'general'.
 """
 
@@ -20,51 +33,79 @@ Cuentas con dos fuentes de verdad:
 
 REGLAS:
 - No alucines. Si el RAG no menciona un detalle, usa tus conocimientos generales pero aclara que es teoría.
-- Si detectas un ataque, explica el "por qué" técnico (ej: el handshake TCP incompleto).
+- Si detectas un ataque, explica el "por qué" técnico.
 - Siempre termina con 3 opciones numeradas de "Siguientes Pasos".
 """
 
+
+def init_rag_service():
+    global rag
+    if rag is None:
+        rag = RAGService()
+    return rag
+
+
+def normalize_topic(raw: str) -> str:
+    if not raw:
+        return "general"
+
+    txt = raw.strip().lower()
+    txt = re.sub(r"[^a-z_]", "", txt)
+
+    if txt in ALLOWED_TOPICS:
+        return txt
+
+    for topic in ALLOWED_TOPICS:
+        if topic != "general" and topic in txt:
+            return topic
+
+    return "general"
+
+
 def get_tutor_response(user_message: str, pcap_data: dict = None):
-    # 1. Identificar Tópico (Sustitución de Dialogflow)
+    global rag
+
+    if rag is None:
+        raise RuntimeError("RAG no inicializado todavía")
+
     intent_response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile", # O tu modelo de 120B preferido
+        model="llama-3.3-70b-versatile",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT_INTENT},
-            {"role": "user", "content": user_message}
-        ]
+            {"role": "user", "content": user_message},
+        ],
+        temperature=0.0,
     )
-    topic = intent_response.choices[0].message.content.strip().lower()
 
-    # 2. Obtener contexto del RAG basado en el tópico y mensaje
+    raw_topic = intent_response.choices[0].message.content.strip()
+    topic = normalize_topic(raw_topic)
+
     rag_context = rag.get_knowledge(user_message, topic=topic)
 
-    # 3. Construir Prompt Final con datos de Scapy y RAG
+    print(f"--- DEBUG RAG (RAW: {raw_topic!r} | TOPIC: {topic}) ---")
+    print(rag_context if rag_context else "⚠️ RAG VACÍO - NO SE ENCONTRÓ NADA")
+    print("-----------------------------------")
+
     pcap_context = f"Datos de Scapy: {pcap_data}" if pcap_data else "No hay archivo subido aún."
-    
+
     full_prompt = f"""
-    CONTEXTO TÉCNICO (RAG):
-    {rag_context}
+CONTEXTO TÉCNICO (RAG):
+{rag_context if rag_context else "No se recuperó contexto técnico adicional."}
 
-    DATOS DE LA CAPTURA (SCAPY):
-    {pcap_context}
+DATOS DE LA CAPTURA (SCAPY):
+{pcap_context}
 
-    MENSAJE DEL USUARIO:
-    {user_message}
-    """
+MENSAJE DEL USUARIO:
+{user_message}
+"""
 
-    try:
-        final_response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT_TUTOR},
-                {"role": "user", "content": full_prompt}
-            ],
-            temperature=0.2 # Baja temperatura para respuestas más técnicas y precisas
-        )
-    except Exception as e:
-        raise RuntimeError(f"Intent classification failed: {e}")
-
-    if not final_response.choices:
-        raise RuntimeError("No choices returned from intent model")
+    final_response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT_TUTOR},
+            {"role": "user", "content": full_prompt},
+        ],
+        temperature=0.2,
+    )
 
     return final_response.choices[0].message.content
