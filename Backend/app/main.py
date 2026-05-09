@@ -8,55 +8,62 @@ import shutil
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
+from pydantic import BaseModel
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+# --- Configuración de Rutas y Entorno ---
 BASE_DIR = Path(__file__).resolve().parents[2]  # Backend/
 load_dotenv(BASE_DIR / ".env")
 
+# --- Importaciones de Servicios y Modelos ---
 from app.scripts.ingest import run_ingestion
 from app.models.schemas import ChatRequest
 from app.services.agent import get_tutor_response, init_rag_service
 from app.services.analyzer import analyze_pcap
+from app.services.auth_service import validar_credenciales, registrar_usuario
 
+# --- Esquemas para Autenticación ---
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class RegisterRequest(BaseModel):
+    nombre: str
+    email: str
+    password: str
+
+# --- Gestión de Estado de la Aplicación ---
 app_state = {
     "is_ready": False,
     "init_error": None,
     "phase": "starting",
 }
 
-ready_event = threading.Event()
-
 def background_initialization():
+    """Carga los documentos y la IA en un hilo separado para no bloquear la API"""
     try:
         app_state["phase"] = "ingesting"
-        print("🛠️ Iniciando ingesta...")
-        
-        # Ejecuta la ingesta si es necesario (el script ya chequea internamente o sobreescribe)
+        print("🛠️ Iniciando ingesta de documentos...")
         run_ingestion()
-        print("✅ Ingesta completada o verificada.")
-
+        
         app_state["phase"] = "loading_rag"
-        print("🧠 Cargando RAG en memoria...")
+        print("🧠 Cargando modelos RAG en memoria...")
         init_rag_service()
-        print("✅ RAG listo.")
-
+        
         app_state["is_ready"] = True
         app_state["phase"] = "ready"
-        ready_event.set()
-        print("🚀 TUTOR LISTO PARA RECIBIR PREGUNTAS")
-
+        print("🚀 TUTOR LISTO: Base de conocimientos y modelos cargados.")
     except Exception as e:
         app_state["init_error"] = str(e)
         app_state["phase"] = "error"
-        ready_event.set()
         print(f"❌ Error crítico en inicialización: {e}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # El hilo secundario ahora es seguro gracias a TOKENIZERS_PARALLELISM = false
+    # Inicia la carga pesada al arrancar
     thread = threading.Thread(target=background_initialization, daemon=True)
     thread.start()
     yield
@@ -64,14 +71,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Cybersecurity Tutor API", lifespan=lifespan)
 
-origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-]
-
+# --- Configuración de CORS ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -80,12 +83,17 @@ app.add_middleware(
 CAPTURES_DIR = BASE_DIR / "data" / "captures"
 CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
 
+# ==============================================================
+# ENDPOINTS DE ESTADO Y AUTENTICACIÓN
+# ==============================================================
+
 @app.get("/")
 def read_root():
     return {"message": "Tutor de Ciberseguridad Activo"}
 
 @app.get("/api/status")
 async def get_status():
+    """Permite al Frontend saber si debe bloquear o no el chat"""
     return {
         "status": "ready" if app_state["is_ready"] else "initializing",
         "phase": app_state["phase"],
@@ -93,14 +101,33 @@ async def get_status():
         "error": app_state["init_error"],
     }
 
+@app.post("/api/login")
+async def login_endpoint(credentials: LoginRequest):
+    user = validar_credenciales(credentials.email, credentials.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
+    return {"status": "success", "user": user}
+
+@app.post("/api/register")
+async def register_endpoint(user_data: RegisterRequest):
+    nuevo_usuario = registrar_usuario(
+        user_data.nombre, 
+        user_data.email, 
+        user_data.password
+    )
+    if not nuevo_usuario:
+        raise HTTPException(status_code=400, detail="El correo ya existe o hubo un error")
+    return {"status": "success", "message": "Usuario creado correctamente"}
+
+# ==============================================================
+# ENDPOINTS DE TUTORÍA (IA)
+# ==============================================================
+
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
     if not app_state["is_ready"]:
-        raise HTTPException(
-            status_code=503,
-            detail=f"El tutor aún se está inicializando. Fase actual: {app_state['phase']}"
-        )
-
+        raise HTTPException(status_code=503, detail="La IA aún se está cargando.")
+    
     try:
         response = get_tutor_response(request.message)
         return {"status": "success", "response": response}
@@ -113,7 +140,6 @@ async def analyze_endpoint(file: UploadFile = File(...)):
         raise HTTPException(status_code=503, detail="Sistema en inicialización.")
 
     file_path = CAPTURES_DIR / file.filename
-
     try:
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
