@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from pydantic import BaseModel
 
+# pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,7 +22,7 @@ load_dotenv(BASE_DIR / ".env")
 # --- Importaciones de Servicios y Modelos ---
 from app.scripts.ingest import run_ingestion
 from app.models.schemas import ChatRequest
-from app.services.agent import get_tutor_response, init_rag_service
+from app.services.agent import get_tutor_response, init_rag_service, get_pcap_analysis_response
 from app.services.analyzer import analyze_pcap
 from app.services.auth_service import validar_credenciales, registrar_usuario
 # NUEVO: Lógica de persistencia y carga de historial
@@ -146,6 +147,19 @@ async def get_chat_history(email: str):
         # Si no hay usuario o sesión aún, devolvemos historial vacío en lugar de error
         return {"status": "success", "history": []}
 
+@app.delete("/api/chat/history/{email}")
+async def delete_chat_history(email: str, nodo_actual: str = "inicio"):
+    try:
+        from app.services.chat_service import borrar_historial_db
+        id_sesion = obtener_o_crear_sesion(email)
+        exito = borrar_historial_db(id_sesion, nodo_actual)
+        if exito:
+            return {"status": "success", "message": "Historial borrado"}
+        else:
+            raise HTTPException(status_code=500, detail="Error al borrar historial en DB")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
     if not app_state["is_ready"]:
@@ -158,8 +172,12 @@ async def chat_endpoint(request: ChatRequest):
         # 2. Guardar mensaje del Estudiante
         guardar_mensaje_db(id_sesion, "user", request.message, request.nodo_actual)
 
-        # 3. Generar respuesta de la IA (RAG)
-        response = get_tutor_response(request.message)
+        # 2.5 Cargar historial del nodo actual
+        historial_db = cargar_historial_db(id_sesion)
+        historial_nodo = [{"role": m["role"], "content": m["content"]} for m in historial_db if m["nodo"] == request.nodo_actual]
+
+        # 3. Generar respuesta de la IA (RAG) con contexto del historial
+        response = get_tutor_response(request.message, history=historial_nodo)
 
         # 4. Guardar respuesta del Tutor
         guardar_mensaje_db(id_sesion, "assistant", response, request.nodo_actual)
@@ -190,7 +208,7 @@ async def analyze_endpoint(email: str, file: UploadFile = File(...), nodo_actual
         guardar_mensaje_db(id_sesion, "user", user_msg, nodo_actual)
 
         # Generar narrativa pedagógica sobre el tráfico
-        narrative = get_tutor_response(f"Explícame los hallazgos de este PCAP: {user_msg}", pcap_data=pcap_data)
+        narrative = get_pcap_analysis_response(pcap_data)
         
         guardar_mensaje_db(id_sesion, "assistant", narrative, nodo_actual)
 

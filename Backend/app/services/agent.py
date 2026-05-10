@@ -1,5 +1,6 @@
 import os
 import re
+# pyrefly: ignore [missing-import]
 from groq import Groq
 
 from app.services.rag_service import RAGService
@@ -37,6 +38,54 @@ REGLAS:
 - Siempre termina con 3 opciones numeradas de "Siguientes Pasos".
 """
 
+SYSTEM_PROMPT_PCAP_ANALYSIS = """
+Actúa como un Tutor Proactivo de Ciberseguridad. Tu objetivo no es solo resumir, sino DIRIGIR el aprendizaje del usuario basándote en este archivo .pcap:
+
+RESUMEN TÉCNICO DE SCAPY:
+{pcap_summary}
+
+INSTRUCCIONES DE FLUJO (Bifurcaciones Lógicas):
+Analiza los datos y toma decisiones basadas en estas reglas:
+
+1. BIFURCACIÓN DE SEGURIDAD:
+   - SI detectas protocolos sin cifrar (HTTP, FTP, Telnet) o mDNS exponiendo nombres, inicia con una ALERTA proactiva.
+   - SI todo es HTTPS/TLS, felicita al usuario por tener tráfico cifrado y explica por qué es importante.
+
+2. BIFURCACIÓN DE PROTOCOLO:
+   - SI hay handshakes TCP, elige un flujo y explica el proceso SYN-ACK.
+   - SI hay mucho tráfico UDP/DNS, explica por qué este protocolo es "sin conexión".
+
+3. BIFURCACIÓN DE IDENTIDAD:
+   - SI ves IPs externas (Internet), identifica a qué servicio podrían pertenecer (Google, CDNs, etc.).
+   - SI es solo tráfico local, explica la función del Router como Gateway.
+
+FORMATO DE RESPUESTA (Estructura Directiva):
+- Saludo de Tutor: "He analizado tu red y esto es lo que DEBES saber..."
+- El Hallazgo Maestro: (Aplica las bifurcaciones arriba mencionadas).
+- El "Por qué": Explica la lógica técnica detrás de tu conclusión.
+- CIERRE DIRECTIVO: No esperes a que el usuario piense qué preguntar. Presenta 3 opciones numeradas de "Siguientes Pasos" (que representen nuevas intenciones de aprendizaje).
+
+REGLA DE ORO: No seas pasivo. Tú eres el experto guiando a un novato.
+"""
+
+def get_pcap_analysis_response(pcap_data: dict, history: list = None) -> str:
+    prompt = SYSTEM_PROMPT_PCAP_ANALYSIS.format(pcap_summary=str(pcap_data))
+    
+    messages_to_send = [{"role": "system", "content": prompt}]
+    
+    if history:
+        messages_to_send.extend(history)
+    else:
+        messages_to_send.append({"role": "user", "content": "Analiza los datos del PCAP y guía mi aprendizaje de acuerdo a las reglas establecidas."})
+        
+    final_response = client.chat.completions.create(
+        model="openai/gpt-oss-120b",
+        messages=messages_to_send,
+        temperature=0.2,
+    )
+    return final_response.choices[0].message.content
+
+
 
 def init_rag_service():
     global rag
@@ -62,14 +111,14 @@ def normalize_topic(raw: str) -> str:
     return "general"
 
 
-def get_tutor_response(user_message: str, pcap_data: dict = None):
+def get_tutor_response(user_message: str, pcap_data: dict = None, history: list = None):
     global rag
 
     if rag is None:
         raise RuntimeError("RAG no inicializado todavía")
 
     intent_response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="llama-3.3-70b-versatile", # Este se mantiene en LLaMA para clasificar la intención rápido y barato
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT_INTENT},
             {"role": "user", "content": user_message},
@@ -88,23 +137,24 @@ def get_tutor_response(user_message: str, pcap_data: dict = None):
 
     pcap_context = f"Datos de Scapy: {pcap_data}" if pcap_data else "No hay archivo subido aún."
 
-    full_prompt = f"""
+    full_system_prompt = f"""{SYSTEM_PROMPT_TUTOR}
 CONTEXTO TÉCNICO (RAG):
 {rag_context if rag_context else "No se recuperó contexto técnico adicional."}
 
 DATOS DE LA CAPTURA (SCAPY):
 {pcap_context}
-
-MENSAJE DEL USUARIO:
-{user_message}
 """
 
+    messages_to_send = [{"role": "system", "content": full_system_prompt}]
+    
+    if history:
+        messages_to_send.extend(history)
+    else:
+        messages_to_send.append({"role": "user", "content": user_message})
+
     final_response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT_TUTOR},
-            {"role": "user", "content": full_prompt},
-        ],
+        model="openai/gpt-oss-120b",
+        messages=messages_to_send,
         temperature=0.2,
     )
 

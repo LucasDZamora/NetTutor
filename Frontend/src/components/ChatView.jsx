@@ -146,6 +146,29 @@ useEffect(() => {
   };
 
   // =========================
+  // BORRAR HISTORIAL
+  // =========================
+  const handleDeleteHistory = async () => {
+    if (!window.confirm("¿Estás seguro de que deseas borrar todo el historial de este chat?")) return;
+    
+    const emailActual = localStorage.getItem("userEmail");
+    if (!emailActual || emailActual === "undefined") return;
+
+    try {
+      const res = await fetch(`http://localhost:8000/api/chat/history/${encodeURIComponent(emailActual)}?nodo_actual=inicio`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        setMessages([]);
+      } else {
+        alert("Error al borrar el historial");
+      }
+    } catch (err) {
+      alert("Error de conexión");
+    }
+  };
+
+  // =========================
   // MONITOR DE SESIÓN (NUEVO)
   // =========================
   useEffect(() => {
@@ -176,10 +199,25 @@ useEffect(() => {
             </div>
           </div>
 
-          <div className={`text-xs font-bold px-3 py-1 rounded-full ${
-            backendReady ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
-          }`}>
-            {backendMessage}
+          <div className="flex items-center gap-3">
+            {messages.length > 0 && (
+              <button 
+                onClick={handleDeleteHistory}
+                disabled={isLoading}
+                className="bg-red-50 text-red-600 hover:bg-red-100 px-3 py-1.5 rounded-xl font-bold shadow-sm transition-all flex items-center gap-2 text-xs border border-red-200"
+                title="Borrar Historial"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                Borrar
+              </button>
+            )}
+            <div className={`text-xs font-bold px-3 py-1 rounded-full ${
+              backendReady ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+            }`}>
+              {backendMessage}
+            </div>
           </div>
         </div>
 
