@@ -1,5 +1,6 @@
 import os
 import re
+import json
 # pyrefly: ignore [missing-import]
 from groq import Groq
 
@@ -18,6 +19,49 @@ ALLOWED_TOPICS = {
     "http_phishing",
     "general",
 }
+
+# --- NUEVO PROMPT PARA DISEÑO DE ESCENARIOS ---
+SYSTEM_PROMPT_SCENARIO_DESIGNER = """
+Eres el Arquitecto de Simulaciones de NetTutor. Tu función es generar escenarios de ciberseguridad dinámicos y realistas basados en documentación técnica y un nivel de dificultad.
+
+CONTEXTO TÉCNICO RECUPERADO DEL RAG (Usa esto para los detalles de los paquetes):
+{contexto_rag}
+
+REGLAS DE DISEÑO:
+- VARIEDAD: Crea una situación ficticia diferente cada vez. No repitas nombres de empresas.
+- REALISMO TÉCNICO: Utiliza el contexto RAG para definir IPs, puertos y protocolos correctos.
+- GENERACIÓN DE TRÁFICO: Debes inventar una lista de al menos 20 paquetes que representen el ataque mencionado.
+- FORMATO: Responde ÚNICAMENTE en formato JSON.
+
+FORMATO DE SALIDA (JSON):
+{{
+  "escenario": {{
+    "empresa_ficticia": "Nombre de la empresa",
+    "descripcion_entorno": "Contexto del analista",
+    "incidente_reportado": "Anomalía detectada",
+    "objetivo_aprendizaje": "Lo que el estudiante debe descubrir"
+  }},
+  "guia_tutor": {{
+    "mensaje_inicial": "Saludo inicial del tutor",
+    "pistas_sistema": ["Pista 1", "Pista 2", "Pista 3"]
+  }},
+  "paquetes_pcap": [
+    {{
+      "no": 1,
+      "time": "0.0000",
+      "src": "IP_ORIGEN",
+      "dst": "IP_DESTINO",
+      "pr": "PROTOCOLO",
+      "len": "LONGITUD",
+      "info": "Descripción técnica (ej: [SYN], USER admin, etc.)"
+    }}
+  ],
+  "metadata_simulacion": {{
+    "dificultad": "Nivel {nivel_id}",
+    "topico": "{topico}"
+  }}
+}}
+"""
 
 SYSTEM_PROMPT_INTENT = """
 Eres un clasificador de intenciones experto en ciberseguridad.
@@ -68,6 +112,45 @@ FORMATO DE RESPUESTA (Estructura Directiva):
 REGLA DE ORO: No seas pasivo. Tú eres el experto guiando a un novato.
 """
 
+# --- NUEVA FUNCIÓN PARA GENERAR ESCENARIOS ---
+def generate_scenario_data(nivel_id: int):
+    """
+    Genera un escenario dinámico basado en el nivel seleccionado, consultando el RAG.
+    """
+    global rag
+    if rag is None:
+        init_rag_service()
+        
+    topic_map = {
+        1: "telnet",
+        2: "http_phishing",
+        3: "port_scan",
+        4: "dos",
+        5: "malware_c2"
+    }
+    topic = topic_map.get(nivel_id, "general")
+    
+    # 1. Obtener contexto real del RAG para alimentar al diseñador
+    contexto_rag = rag.get_knowledge(f"Análisis y características técnicas de {topic}", topic=topic)
+    
+    # 2. Configurar el prompt
+    prompt = SYSTEM_PROMPT_SCENARIO_DESIGNER.format(
+        contexto_rag=contexto_rag if contexto_rag else "Información general sobre seguridad de red.",
+        nivel_id=nivel_id,
+        topico=topic
+    )
+    
+    # 3. Llamada al LLM solicitando JSON
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "system", "content": prompt}],
+        temperature=0.8, # Temperatura alta para asegurar escenarios diferentes cada vez
+        response_format={"type": "json_object"}
+    )
+    
+    return json.loads(response.choices[0].message.content)
+
+
 def get_pcap_analysis_response(pcap_data: dict, history: list = None) -> str:
     prompt = SYSTEM_PROMPT_PCAP_ANALYSIS.format(pcap_summary=str(pcap_data))
     
@@ -84,7 +167,6 @@ def get_pcap_analysis_response(pcap_data: dict, history: list = None) -> str:
         temperature=0.2,
     )
     return final_response.choices[0].message.content
-
 
 
 def init_rag_service():
@@ -118,7 +200,7 @@ def get_tutor_response(user_message: str, pcap_data: dict = None, history: list 
         raise RuntimeError("RAG no inicializado todavía")
 
     intent_response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile", # Este se mantiene en LLaMA para clasificar la intención rápido y barato
+        model="llama-3.3-70b-versatile",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT_INTENT},
             {"role": "user", "content": user_message},
@@ -130,10 +212,6 @@ def get_tutor_response(user_message: str, pcap_data: dict = None, history: list 
     topic = normalize_topic(raw_topic)
 
     rag_context = rag.get_knowledge(user_message, topic=topic)
-
-    print(f"--- DEBUG RAG (RAW: {raw_topic!r} | TOPIC: {topic}) ---")
-    print(rag_context if rag_context else "⚠️ RAG VACÍO - NO SE ENCONTRÓ NADA")
-    print("-----------------------------------")
 
     pcap_context = f"Datos de Scapy: {pcap_data}" if pcap_data else "No hay archivo subido aún."
 
