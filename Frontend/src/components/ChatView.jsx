@@ -8,7 +8,9 @@ export default function ChatView() {
   const [backendMessage, setBackendMessage] = useState('Inicializando tutor...');
 
   const scrollRef = useRef(null);
+  const userEmail = localStorage.getItem("userEmail");
 
+  
   // =========================
   // AUTO SCROLL
   // =========================
@@ -50,36 +52,35 @@ export default function ChatView() {
   // =========================
   // CARGAR HISTORIAL
   // =========================
-  useEffect(() => {
-    const cargarHistorial = async () => {
-      const emailEnStorage = localStorage.getItem("userEmail");
+useEffect(() => {
+  const cargarHistorial = async () => {
+    // Buscamos el email justo cuando el componente se monta
+    const emailEnStorage = localStorage.getItem("userEmail");
 
-      // No intentamos cargar nada si no hay un email válido
-      if (!emailEnStorage || emailEnStorage === "undefined") {
-        console.warn("Esperando inicio de sesión válido...");
-        return; 
-      }
+    if (!emailEnStorage || emailEnStorage === "undefined") {
+      setMessages([]);
+      return;
+    }
 
-      try {
-        const response = await fetch(`http://localhost:8000/api/chat/history/${emailEnStorage}`);
-        
-        if (response.ok) {
-          const data = await response.json();
-          if (data.status === "success") {
-            const historialFormateado = data.history.map(msg => ({
-              role: msg.rol === "user" ? "user" : "assistant",
-              content: msg.contenido,
-            }));
-            setMessages(historialFormateado);
-          }
+    try {
+      const response = await fetch(`http://localhost:8000/api/chat/history/${emailEnStorage}`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.status === "success" && data.history) {
+          const historialFormateado = data.history.map(msg => ({
+            role: msg.role,
+            content: msg.content
+          }));
+          setMessages(historialFormateado);
         }
-      } catch (error) {
-        console.error("Error cargando historial:", error);
       }
-    };
+    } catch (error) {
+      console.error("Error al cargar:", error);
+    }
+  };
 
-    cargarHistorial();
-  }, []);
+  cargarHistorial();
+}, []);
 
   // =========================
   // ENVIAR MENSAJE
@@ -143,6 +144,18 @@ export default function ChatView() {
       setIsLoading(false);
     }
   };
+
+  // =========================
+  // MONITOR DE SESIÓN (NUEVO)
+  // =========================
+  useEffect(() => {
+    const emailEnStorage = localStorage.getItem("userEmail");
+    
+    // Si no hay email (deslogueo), limpiamos los mensajes inmediatamente
+    if (!emailEnStorage || emailEnStorage === "undefined") {
+      setMessages([]);
+    }
+  }, [localStorage.getItem("userEmail")]); // Se ejecuta cuando cambia el email
 
   // Obtenemos el email solo para mostrarlo en el Header (UI)
   const displayEmail = localStorage.getItem("userEmail") || "Invitado";

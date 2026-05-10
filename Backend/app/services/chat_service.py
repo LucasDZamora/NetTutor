@@ -76,7 +76,16 @@ def cargar_historial_db(id_sesion: int):
             .eq("id_sesion", id_sesion)\
             .order("enviado_en", desc=False)\
             .execute()
-        return res.data if res.data else []
+        
+        historial_para_frontend = []
+        for msg in res.data:
+            # Sincronizamos con lo que tu ChatView.jsx espera
+            historial_para_frontend.append({
+                "role": "user" if msg["rol"] == 1 else "assistant",
+                "content": msg["contenido"],
+                "nodo": msg["nodo_pedagogico"]
+            })
+        return historial_para_frontend
     except Exception as e:
         print(f"❌ Error al cargar historial: {e}")
         return []
