@@ -24,6 +24,8 @@ from app.models.schemas import ChatRequest
 from app.services.agent import get_tutor_response, init_rag_service
 from app.services.analyzer import analyze_pcap
 from app.services.auth_service import validar_credenciales, registrar_usuario
+# NUEVO: Lógica de persistencia y carga de historial
+from app.services.chat_service import obtener_o_crear_sesion, guardar_mensaje_db, cargar_historial_db
 
 # --- Esquemas para Autenticación ---
 class LoginRequest(BaseModel):
@@ -72,9 +74,17 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Cybersecurity Tutor API", lifespan=lifespan)
 
 # --- Configuración de CORS ---
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:5175",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -93,7 +103,6 @@ def read_root():
 
 @app.get("/api/status")
 async def get_status():
-    """Permite al Frontend saber si debe bloquear o no el chat"""
     return {
         "status": "ready" if app_state["is_ready"] else "initializing",
         "phase": app_state["phase"],
@@ -120,8 +129,22 @@ async def register_endpoint(user_data: RegisterRequest):
     return {"status": "success", "message": "Usuario creado correctamente"}
 
 # ==============================================================
-# ENDPOINTS DE TUTORÍA (IA)
+# ENDPOINTS DE TUTORÍA (IA) Y PERSISTENCIA
 # ==============================================================
+
+@app.get("/api/chat/history/{email}")
+async def get_chat_history(email: str):
+    """
+    Nuevo: Recupera el historial de chat de Supabase para un usuario.
+    Evita el error 404 cuando el frontend carga el componente.
+    """
+    try:
+        id_sesion = obtener_o_crear_sesion(email)
+        historial = cargar_historial_db(id_sesion)
+        return {"status": "success", "history": historial}
+    except Exception as e:
+        # Si no hay usuario o sesión aún, devolvemos historial vacío en lugar de error
+        return {"status": "success", "history": []}
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
@@ -129,13 +152,25 @@ async def chat_endpoint(request: ChatRequest):
         raise HTTPException(status_code=503, detail="La IA aún se está cargando.")
     
     try:
+        # 1. Obtener sesión vinculada al ID real del usuario
+        id_sesion = obtener_o_crear_sesion(request.email)
+
+        # 2. Guardar mensaje del Estudiante
+        guardar_mensaje_db(id_sesion, "user", request.message, request.nodo_actual)
+
+        # 3. Generar respuesta de la IA (RAG)
         response = get_tutor_response(request.message)
+
+        # 4. Guardar respuesta del Tutor
+        guardar_mensaje_db(id_sesion, "assistant", response, request.nodo_actual)
+
         return {"status": "success", "response": response}
     except Exception as e:
+        print(f"Error en chat_endpoint: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/analyze")
-async def analyze_endpoint(file: UploadFile = File(...)):
+async def analyze_endpoint(email: str, file: UploadFile = File(...), nodo_actual: str = "analisis_pcap"):
     if not app_state["is_ready"]:
         raise HTTPException(status_code=503, detail="Sistema en inicialización.")
 
@@ -144,18 +179,28 @@ async def analyze_endpoint(file: UploadFile = File(...)):
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
+        # Análisis técnico con Scapy
         pcap_data = analyze_pcap(str(file_path))
         if isinstance(pcap_data, str) and "Error" in pcap_data:
             return {"status": "error", "message": pcap_data}
 
-        user_msg = f"He subido el archivo {file.filename}. ¿Qué ataques o anomalías detectas?"
-        narrative = get_tutor_response(user_msg, pcap_data=pcap_data)
+        # Persistencia del análisis en el historial
+        id_sesion = obtener_o_crear_sesion(email)
+        user_msg = f"Archivo analizado: {file.filename}"
+        guardar_mensaje_db(id_sesion, "user", user_msg, nodo_actual)
+
+        # Generar narrativa pedagógica sobre el tráfico
+        narrative = get_tutor_response(f"Explícame los hallazgos de este PCAP: {user_msg}", pcap_data=pcap_data)
+        
+        guardar_mensaje_db(id_sesion, "assistant", narrative, nodo_actual)
 
         return {
             "status": "success",
             "narrative": narrative,
             "technical_details": pcap_data,
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         if file_path.exists():
             file_path.unlink()

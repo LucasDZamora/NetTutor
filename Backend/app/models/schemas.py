@@ -2,4 +2,6 @@ from pydantic import BaseModel, Field
 
 
 class ChatRequest(BaseModel):
-    message: str = Field(..., min_length=1)
+    email: str  # Para saber de quién es el mensaje
+    message: str
+    nodo_actual: str = "inicio"
