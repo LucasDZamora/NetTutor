@@ -89,3 +89,15 @@ def cargar_historial_db(id_sesion: int):
     except Exception as e:
         print(f"❌ Error al cargar historial: {e}")
         return []
+
+def borrar_historial_db(id_sesion: int, nodo: str):
+    try:
+        supabase.table("Historial_chat")\
+            .delete()\
+            .eq("id_sesion", id_sesion)\
+            .eq("nodo_pedagogico", nodo)\
+            .execute()
+        return True
+    except Exception as e:
+        print(f"❌ Error al borrar historial: {e}")
+        return False
