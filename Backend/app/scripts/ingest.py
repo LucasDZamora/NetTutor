@@ -169,14 +169,16 @@ def load_pdf_texts(pdf_dir: str):
     return docs
 
 
-def run_ingestion():
+def run_ingestion(force=False):
     base_dir = Path(__file__).resolve().parents[2]  # Backend/
     docs_path = base_dir / "data" / "docs"
     db_path = base_dir / "data" / "chroma_db"
 
     if not docs_path.exists():
         raise FileNotFoundError(f"No existe la carpeta de docs: {docs_path}")
-
+    if db_path.exists() and any(db_path.iterdir()) and not force:
+        print("✅ chroma_db ya existe. Saltando ingesta (usa force=True para regenerar).")
+        return
     docs = load_pdf_texts(str(docs_path))
 
     all_chunks = []
