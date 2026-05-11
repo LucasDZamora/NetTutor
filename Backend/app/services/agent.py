@@ -3,6 +3,7 @@ import re
 import json
 from typing import Any, Dict, List, Optional
 
+# pyrefly: ignore [missing-import]
 from groq import Groq
 
 from app.services.rag_service import RAGService
@@ -12,7 +13,7 @@ rag: Optional[RAGService] = None
 
 ALLOWED_TOPICS = {
     "port_scan",
-    "telnet",
+    "texto_plano",
     "pop3",
     "malware_c2",
     "dos",
@@ -21,7 +22,7 @@ ALLOWED_TOPICS = {
 }
 
 LEVELS = {
-    1: "telnet",
+    1: "texto_plano",
     2: "http_phishing",
     3: "port_scan",
     4: "dos",
@@ -32,23 +33,36 @@ LEVELS = {
 # PROMPTS BASE
 # =========================
 
-SYSTEM_PROMPT_INTENT = """
-Eres un clasificador de intenciones experto en ciberseguridad.
-Tu tarea es analizar la consulta del usuario y determinar cuál de los 5 niveles de ataque está involucrado.
-Responde ÚNICAMENTE con el nombre del tópico:
-'port_scan', 'telnet', 'pop3', 'malware_c2', 'dos', 'http_phishing', o 'general'.
+SYSTEM_PROMPT_GENERAL_ROUTER = """
+Eres el Router de Intenciones para el Chat General de NetTutor.
+Tu tarea es analizar la consulta del usuario y clasificarla.
+
+Debes responder SOLO en JSON válido.
+
+ESQUEMA JSON OBLIGATORIO:
+{
+  "intent": "ask_concept|request_analysis|troubleshoot|general_chat",
+  "topic": "port_scan|texto_plano|pop3|malware_c2|dos|http_phishing|general",
+  "needs_rag": true,
+  "summary": "Breve resumen de lo que el usuario quiere lograr"
+}
 """
 
-SYSTEM_PROMPT_TUTOR = """
-Eres un Tutor Proactivo de Ciberseguridad. Tu misión es guiar al estudiante usando el método socrático y técnico.
-Cuentas con dos fuentes de verdad:
-1. INFORMACIÓN DEL PCAP: Datos crudos extraídos de la captura subida.
-2. CONTEXTO TÉCNICO RAG: Documentación oficial (RFCs, MITRE, OWASP).
+SYSTEM_PROMPT_GENERAL_TUTOR = """
+Eres un Tutor Técnico Directivo en Ciberseguridad.
+A diferencia de un bot de chat común, tu objetivo es dar respuestas DIRECTAS, CLARAS y RESOLUTIVAS, pero manteniendo en todo momento tu rol de TUTOR experto guiando a un estudiante.
+
+Cuentas con:
+1. INTENCIÓN DEL USUARIO: {intent_json}
+2. INFORMACIÓN DEL PCAP: Datos de la captura subida.
+3. CONTEXTO TÉCNICO RAG: Documentación técnica.
 
 REGLAS:
-- No alucines. Si el RAG no menciona un detalle, usa tus conocimientos generales pero aclara que es teoría.
-- Si detectas un ataque, explica el "por qué" técnico.
-- Siempre termina con 3 opciones numeradas de "Siguientes Pasos".
+- Ve directo al grano. Usa un tono profesional y resolutivo.
+- Si el usuario pide un concepto, defínelo claramente.
+- Si pide analizar el PCAP, dale el análisis directo sin preámbulos.
+- NO uses el método socrático. Si el usuario se equivoca, simplemente dale la respuesta correcta.
+- Al final de tu mensaje, SIEMPRE ofrece 2 o 3 opciones cortas y numeradas para que el usuario elija hacia dónde dirigir la conversación (ej. "1. Profundizar en X", "2. Analizar el tráfico Y").
 """
 
 SYSTEM_PROMPT_PCAP_ANALYSIS = """
@@ -108,18 +122,20 @@ REGLAS:
 - No expliques; solo clasifica y resume.
 - No uses markdown.
 - No agregues texto fuera del JSON.
+- Si el usuario identifica o acierta la vulnerabilidad principal del escenario, debes marcar "completed": true en progress.
 
 ESQUEMA JSON OBLIGATORIO:
 {
   "intent": "identify_attack|describe_observation|ask_concept|request_mitigation|compare_protocols|confirm_understanding|advance_level|general",
   "branch": "novice|intermediate|advanced|unclear|off_topic",
-  "topic": "port_scan|telnet|pop3|malware_c2|dos|http_phishing|general",
+  "topic": "port_scan|texto_plano|pop3|malware_c2|dos|http_phishing|general",
   "question_focus": "resumen corto de lo que realmente pregunta",
   "packet_id": 123,
   "needs_rag": true,
   "progress": {
     "level": 1,
-    "stage": "start|diagnosis|explanation|mitigation|review"
+    "stage": "start|diagnosis|explanation|mitigation|review",
+    "completed": false
   },
   "memory_update": "resumen corto y útil de lo que cambió en esta interacción",
   "confidence": 0.0
@@ -127,7 +143,7 @@ ESQUEMA JSON OBLIGATORIO:
 """
 
 SYSTEM_PROMPT_SIM_TUTOR = """
-Eres un Tutor Proactivo de Ciberseguridad.
+Eres un Tutor Proactivo de Ciberseguridad en un chat interactivo.
 
 Tu misión es responder usando:
 1) la intención estructurada del router,
@@ -135,23 +151,12 @@ Tu misión es responder usando:
 3) el contexto del PCAP,
 4) el contexto técnico recuperado del RAG.
 
-REGLAS:
-- No alucines.
-- Si el RAG no menciona un detalle, dilo como inferencia o teoría.
-- Mantén el nivel acorde al progreso del estudiante.
-- Si el alumno está en nivel bajo, guía paso a paso.
-- Si está avanzado, usa lenguaje más técnico y directo.
-- Siempre termina con 3 opciones numeradas de "Siguientes pasos".
-- Si el router marca off_topic, redirige brevemente al simulador.
-- Si el router marca request_mitigation, prioriza defensas, detección y contención.
-- Si el router marca identify_attack, prioriza hallazgo, evidencia y razonamiento técnico.
-- Si el router marca confirm_understanding, valida o corrige la hipótesis del estudiante.
+REGLAS ABSOLUTAS:
+1. RESPUESTAS CORTAS Y CONVERSACIONALES: Eres un tutor en un chat, NO un generador de reportes. Tus respuestas deben ser breves, directas y en lenguaje natural (ej. "No es correcto, deberías enfocarte en la columna de información."). NO uses encabezados (como "Hallazgo central", "Explicación técnica"), NO uses viñetas largas, y evita párrafos extensos.
 
-Formato sugerido de salida:
-- Hallazgo o respuesta central
-- Explicación técnica
-- Relación con el contexto recuperado
-- Siguientes pasos numerados
+2. CONDICIÓN DE VICTORIA: Si el JSON del router indica `"completed": true` (el usuario identificó la vulnerabilidad), tu respuesta DEBE COMENZAR EXACTAMENTE CON LA FRASE: "Encontraste la vulnerabilidad, nivel completado." y a continuación, en el mismo mensaje, explica brevemente cómo resolver o mitigar esta vulnerabilidad. ESTÁ ESTRICTAMENTE PROHIBIDO hacer nuevas preguntas o incluir la sección de "Siguientes pasos" en este caso.
+
+3. EN CUALQUIER OTRO CASO: Guía al alumno paso a paso usando el método socrático de forma muy concisa. Termina tu mensaje con UNA sola pregunta corta o sugerencia puntual que invite al alumno a pensar o investigar el siguiente paso. NO des 3 opciones largas de siguientes pasos.
 """
 
 SYSTEM_PROMPT_SCENARIO_DESIGNER = """
@@ -297,6 +302,7 @@ def normalize_router_output(data: Dict[str, Any]) -> Dict[str, Any]:
         "progress": {
             "level": int(progress.get("level", 0) or 0),
             "stage": progress.get("stage", "start"),
+            "completed": bool(progress.get("completed", False)),
         },
         "memory_update": str(data.get("memory_update", "")).strip(),
         "confidence": float(data.get("confidence", 0.0) or 0.0),
@@ -529,29 +535,37 @@ def get_tutor_response(
     if rag is None:
         raise RuntimeError("RAG no inicializado todavía")
 
+    # 1. Router de intención con gpt-oss-120b
+    router_messages = [
+        {"role": "system", "content": SYSTEM_PROMPT_GENERAL_ROUTER},
+        {"role": "user", "content": f"MENSAJE ACTUAL:\n{user_message}"}
+    ]
+    if history:
+        historial_breve = history[-3:] if len(history) >= 3 else history
+        router_messages.insert(1, {"role": "system", "content": f"HISTORIAL RECIENTE:\n{json.dumps(historial_breve, ensure_ascii=False)}"})
+
     intent_response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT_INTENT},
-            {"role": "user", "content": user_message},
-        ],
-        temperature=0.0,
+        model="openai/gpt-oss-120b",
+        messages=router_messages,
+        temperature=0.1,
+        response_format={"type": "json_object"}
     )
 
-    raw_topic = intent_response.choices[0].message.content.strip()
+    raw_router = intent_response.choices[0].message.content.strip()
+    router_json = safe_json_loads(raw_router)
+    
+    raw_topic = router_json.get("topic", "general")
     topic = normalize_topic(raw_topic)
 
-    rag_context = rag.get_knowledge(user_message, topic=topic)
+    rag_context = ""
+    if router_json.get("needs_rag", True):
+        rag_context = rag.get_knowledge(user_message, topic=topic)
 
     pcap_context = f"Datos de Scapy: {pcap_data}" if pcap_data else "No hay archivo subido aún."
 
-    full_system_prompt = f"""{SYSTEM_PROMPT_TUTOR}
-CONTEXTO TÉCNICO (RAG):
-{rag_context if rag_context else "No se recuperó contexto técnico adicional."}
-
-DATOS DE LA CAPTURA (SCAPY):
-{pcap_context}
-"""
+    full_system_prompt = SYSTEM_PROMPT_GENERAL_TUTOR.format(
+        intent_json=json.dumps(router_json, ensure_ascii=False)
+    ) + f"\n\nCONTEXTO TÉCNICO (RAG):\n{rag_context if rag_context else 'No se recuperó contexto técnico adicional.'}\n\nDATOS DE LA CAPTURA (SCAPY):\n{pcap_context}"
 
     messages_to_send = [{"role": "system", "content": full_system_prompt}]
     if history:
@@ -564,8 +578,10 @@ DATOS DE LA CAPTURA (SCAPY):
         messages=messages_to_send,
         temperature=0.2,
     )
-
-    return final_response.choices[0].message.content
+    return {
+        "response": final_response.choices[0].message.content,
+        "router": router_json
+    }
 
 # =========================
 # PCAP ANALYSIS
@@ -607,7 +623,7 @@ def generate_scenario_data(nivel_id: int):
         init_rag_service()
 
     topic_map = {
-        1: "telnet",
+        1: "texto_plano",
         2: "http_phishing",
         3: "port_scan",
         4: "dos",

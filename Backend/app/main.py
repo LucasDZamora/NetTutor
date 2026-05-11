@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from pydantic import BaseModel
 
+# pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -195,11 +196,13 @@ async def chat_endpoint(request: ChatRequest):
             for m in historial_db
             if m["nodo"] == request.nodo_actual
         ]
+        result = get_tutor_response(request.message, history=historial_nodo)
+        response_text = result["response"]
+        router_debug = result["router"]
 
-        response = get_tutor_response(request.message, history=historial_nodo)
-        guardar_mensaje_db(id_sesion, "assistant", response, request.nodo_actual)
+        guardar_mensaje_db(id_sesion, "assistant", response_text, request.nodo_actual)
 
-        return {"status": "success", "response": response}
+        return {"status": "success", "response": response_text, "router": router_debug}
     except Exception as e:
         print(f"Error en chat_endpoint: {e}")
         raise HTTPException(status_code=500, detail=str(e))

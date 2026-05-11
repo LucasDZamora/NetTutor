@@ -1,5 +1,6 @@
 import os
 import json
+# pyrefly: ignore [missing-import]
 from groq import Groq
 from app.services.rag_service import RAGService
 from app.services.agent import SYSTEM_PROMPT_SCENARIO_DESIGNER
@@ -8,7 +9,7 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 rag = RAGService()
 
 TOPIC_MAP = {
-    1: "telnet",
+    1: "texto_plano",
     2: "http_phishing",
     3: "port_scan",
     4: "dos",

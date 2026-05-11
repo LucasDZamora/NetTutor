@@ -9,7 +9,6 @@ export default function SimulatorView() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [memorySummary, setMemorySummary] = useState('');
-  const [lastRouter, setLastRouter] = useState(null);
   const chatBoxRef = useRef(null);
 
   const levelMap = { text: 1, phishing: 2, scan: 3, ddos: 4, c2: 5 };
@@ -28,7 +27,6 @@ export default function SimulatorView() {
     setCurrentLevel(levelId);
     setChatLog([]);
     setMemorySummary('');
-    setLastRouter(null);
 
     try {
       const response = await fetch(`http://localhost:8000/api/scenario/${numericId}`);
@@ -115,7 +113,6 @@ export default function SimulatorView() {
         throw new Error(data.detail || `HTTP ${response.status}`);
       }
 
-      setLastRouter(data.router || null);
       setMemorySummary(data.memory_next || '');
 
       setChatLog((prev) => [
@@ -301,17 +298,6 @@ export default function SimulatorView() {
                       </span>
                     ))}
                   </div>
-                </div>
-              )}
-
-              {lastRouter && (
-                <div className="mt-4 pt-4 border-t border-slate-800">
-                  <p className="text-[10px] text-slate-400 uppercase font-bold mb-2">
-                    Router Debug
-                  </p>
-                  <pre className="text-[9px] text-slate-300 whitespace-pre-wrap break-words">
-                    {JSON.stringify(lastRouter, null, 2)}
-                  </pre>
                 </div>
               )}
             </div>

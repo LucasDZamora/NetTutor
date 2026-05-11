@@ -10,7 +10,7 @@ load_dotenv()
 
 ALLOWED_TOPICS = {
     "port_scan",
-    "telnet",
+    "texto_plano",
     "pop3",
     "malware_c2",
     "dos",

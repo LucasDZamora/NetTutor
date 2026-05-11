@@ -2,8 +2,11 @@ import re
 import shutil
 from pathlib import Path
 
+# pyrefly: ignore [missing-import]
 from langchain_community.document_loaders import PyPDFLoader
+# pyrefly: ignore [missing-import]
 from langchain_chroma import Chroma
+# pyrefly: ignore [missing-import]
 from langchain_huggingface import HuggingFaceEmbeddings
 
 COLLECTION_NAME = "cybersecurity_docs"
@@ -121,8 +124,8 @@ def chunk_text_sentences(
 def infer_topic(filename: str):
     f = filename.lower()
 
-    if "rfc854" in f or "telnet" in f:
-        return "telnet"
+    if "rfc854" in f or "telnet" in f or "texto" in f or "plano" in f:
+        return "texto_plano"
 
     if "rfc1939" in f or "pop3" in f:
         return "pop3"
