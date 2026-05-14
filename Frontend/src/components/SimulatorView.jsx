@@ -107,7 +107,7 @@ export default function SimulatorView() {
 
       const data = await response.json();
 
-      console.log('SIMULATOR BACKEND RESPONSE:', data);
+      console.log('Router Intent (Simulator):', data.router);
 
       if (!response.ok) {
         throw new Error(data.detail || `HTTP ${response.status}`);

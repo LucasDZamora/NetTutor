@@ -21,14 +21,6 @@ ALLOWED_TOPICS = {
     "general",
 }
 
-LEVELS = {
-    1: "texto_plano",
-    2: "http_phishing",
-    3: "port_scan",
-    4: "dos",
-    5: "malware_c2",
-}
-
 # =========================
 # PROMPTS BASE
 # =========================
@@ -189,8 +181,9 @@ REGLAS ABSOLUTAS PARA EL PCAP:
 3. CANTIDAD: Debes generar EXACTAMENTE 30 paquetes en total. (La mayoría deben ser tráfico normal/benigno).
 4. El escenario debe ser diferente cada vez y usar detalles técnicos coherentes con el contexto recuperado.
 5. Usa direcciones IP de origen y destino variadas para simular una red real, pero mantén consistencia en la dirección IP de la víctima y el atacante durante el flujo malicioso.
-6. La finalidad es entrenamiento pedagógico, no explotación real.
-7. REGLA ANTI-SPOILERS: En `incidente_reportado`, `objetivo_aprendizaje`, `mensaje_inicial` y `pistas_sistema`, ESTÁ ESTRICTAMENTE PROHIBIDO mencionar el nombre de la vulnerabilidad o ataque (ej. no uses palabras como "texto plano", "DDOS", "phishing", "malware", "port scan"). Solo describe los SÍNTOMAS percibidos por los usuarios o el sistema (ej. "lentitud anómala", "acceso no autorizado reportado", "tráfico inusual de red"). El estudiante DEBE descubrir qué pasa.
+6. INSTRUCCIÓN ESPECÍFICA DE ESTE NIVEL: {prompt_especifico}
+7. La finalidad es entrenamiento pedagógico, no explotación real.
+8. REGLA ANTI-SPOILERS: En `incidente_reportado`, `objetivo_aprendizaje`, `mensaje_inicial` y `pistas_sistema`, ESTÁ ESTRICTAMENTE PROHIBIDO mencionar el nombre de la vulnerabilidad o ataque (ej. no uses palabras como "texto plano", "DDOS", "phishing", "malware", "port scan"). Solo describe los SÍNTOMAS percibidos por los usuarios o el sistema (ej. "lentitud anómala", "acceso no autorizado reportado", "tráfico inusual de red"). El estudiante DEBE descubrir qué pasa.
 
 ENTRADA:
 - tópico
@@ -352,63 +345,6 @@ def update_long_memory(memory_summary: str, router_json: Dict[str, Any]) -> str:
     merged = current + " | " + update
     return merged[-1200:]
 
-
-def _log_llm1_input(user_message: str, history: Optional[List[Dict[str, str]]], memory_summary: str, pcap_data: Optional[Dict[str, Any]]):
-    print("\n" + "=" * 80)
-    print("LLM1 (ROUTER) - INPUT")
-    print("-" * 80)
-    print("USER MESSAGE:")
-    print(_clip_text(user_message, 1500))
-    print("\nMEMORY SUMMARY:")
-    print(_clip_text(memory_summary or "vacía", 1500))
-    print("\nHISTORY:")
-    print(_pretty(history or [], 1500))
-    print("\nPCAP DATA:")
-    print(_pretty(pcap_data or {}, 1500))
-    print("=" * 80 + "\n")
-
-
-def _log_llm1_output(raw: str, parsed: Dict[str, Any]):
-    print("\n" + "=" * 80)
-    print("LLM1 (ROUTER) - RAW OUTPUT")
-    print("-" * 80)
-    print(_clip_text(raw, 2500))
-    print("\nLLM1 (ROUTER) - PARSED JSON")
-    print("-" * 80)
-    print(_pretty(parsed, 2500))
-    print("=" * 80 + "\n")
-
-
-def _log_llm2_input(router_json: Dict[str, Any], rag_context: str, pcap_data: Optional[Dict[str, Any]], history: Optional[List[Dict[str, str]]], user_message: str, memory_summary: str):
-    print("\n" + "=" * 80)
-    print("LLM2 (TUTOR) - INPUT")
-    print("-" * 80)
-    print("ROUTER JSON:")
-    print(_pretty(router_json, 2500))
-    print("\nRAG CONTEXT:")
-    print(_clip_text(rag_context or "vacío", 3500))
-    print("\nMEMORY SUMMARY:")
-    print(_clip_text(memory_summary or "vacía", 1500))
-    print("\nPCAP DATA:")
-    print(_pretty(pcap_data or {}, 1500))
-    print("\nHISTORY:")
-    print(_pretty(history or [], 1500))
-    print("\nCURRENT USER MESSAGE:")
-    print(_clip_text(user_message, 1500))
-    print("=" * 80 + "\n")
-
-
-def _log_llm2_output(raw: str):
-    print("\n" + "=" * 80)
-    print("LLM2 (TUTOR) - RAW OUTPUT")
-    print("-" * 80)
-    print(_clip_text(raw, 4000))
-    print("=" * 80 + "\n")
-
-# =========================
-# ROUTER
-# =========================
-
 def route_intention(
     user_message: str,
     history: Optional[List[Dict[str, str]]] = None,
@@ -416,7 +352,6 @@ def route_intention(
     pcap_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     history = history or []
-    _log_llm1_input(user_message, history, memory_summary, pcap_data)
 
     pcap_context = f"PCAP: {json.dumps(pcap_data, ensure_ascii=False)}" if pcap_data else "PCAP: null"
 
@@ -456,7 +391,6 @@ Devuelve SOLO JSON.
     parsed = safe_json_loads(raw)
     normalized = normalize_router_output(parsed)
 
-    _log_llm1_output(raw, normalized)
     return normalized
 
 # =========================
@@ -516,8 +450,6 @@ DATOS DE LA CAPTURA (SCAPY):
         messages_to_send.extend(history)
     messages_to_send.append({"role": "user", "content": user_message})
 
-    _log_llm2_input(router_json, rag_context, pcap_data, history, user_message, memory_summary)
-
     final_response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=messages_to_send,
@@ -525,7 +457,6 @@ DATOS DE LA CAPTURA (SCAPY):
     )
 
     answer = final_response.choices[0].message.content
-    _log_llm2_output(answer)
 
     return {
         "response": answer,
@@ -633,12 +564,6 @@ def get_pcap_analysis_response(
         raw_router = intent_response.choices[0].message.content.strip()
         router_json = safe_json_loads(raw_router)
         
-        print("\n" + "=" * 80)
-        print("ANALYSIS CHAT ROUTER (GPT-120B) - INTENT:")
-        print("-" * 80)
-        print(_pretty(router_json, 2500))
-        print("=" * 80 + "\n")
-        
         rag_context = ""
         if router_json.get("needs_rag", True) and rag:
             rag_context = rag.get_knowledge(user_message, topic="general")
@@ -686,15 +611,16 @@ def generate_scenario_data(nivel_id: int):
     if rag is None:
         init_rag_service()
 
-    topic_map = {
-        1: "texto_plano",
-        2: "http_phishing",
-        3: "port_scan",
-        4: "dos",
-        5: "malware_c2",
-    }
+    from app.db.supabase_client import supabase
 
-    topic = topic_map.get(nivel_id, "general")
+    res = supabase.table("Nivel").select("*").eq("id_nivel", nivel_id).execute()
+    if not res.data:
+        raise ValueError(f"Nivel {nivel_id} no encontrado en la BD")
+    
+    nivel_info = res.data[0]
+    topic = nivel_info.get("titulo_ataque", "general")
+    prompt_especifico = nivel_info.get("prompt_especifico", "")
+
     contexto_rag = rag.get_knowledge(
         f"Análisis técnico de {topic}",
         topic=topic,
@@ -706,16 +632,9 @@ TOPICO: {topic}
 NIVEL: {nivel_id}
 CONTEXTO_RAG:
 {contexto_rag if contexto_rag else "Información general de seguridad"}
+INSTRUCCIÓN ESPECÍFICA:
+{prompt_especifico}
 """
-
-    print("\n" + "=" * 80)
-    print("SCENARIO DESIGNER - INPUT")
-    print("-" * 80)
-    print(f"NIVEL: {nivel_id}")
-    print(f"TOPIC: {topic}")
-    print("RAG CONTEXT:")
-    print(_clip_text(contexto_rag or "vacío", 3000))
-    print("=" * 80 + "\n")
 
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
@@ -725,10 +644,4 @@ CONTEXTO_RAG:
     )
 
     raw = response.choices[0].message.content
-    print("\n" + "=" * 80)
-    print("SCENARIO DESIGNER - RAW OUTPUT")
-    print("-" * 80)
-    print(_clip_text(raw, 4000))
-    print("=" * 80 + "\n")
-
     return json.loads(raw)
