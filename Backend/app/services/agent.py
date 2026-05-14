@@ -65,6 +65,21 @@ REGLAS:
 - Al final de tu mensaje, SIEMPRE ofrece 2 o 3 opciones cortas y numeradas para que el usuario elija hacia dónde dirigir la conversación (ej. "1. Profundizar en X", "2. Analizar el tráfico Y").
 """
 
+SYSTEM_PROMPT_ANALYSIS_ROUTER = """
+Eres el Router de Intenciones para el Chat de Análisis Forense de PCAP.
+Tu tarea es analizar la consulta del usuario sobre el archivo PCAP subido y clasificarla.
+
+Debes responder SOLO en JSON válido.
+
+ESQUEMA JSON OBLIGATORIO:
+{
+  "intent": "ask_packet_detail|ask_mitigation|explain_concept|general_chat",
+  "packet_id_referenced": "Número de paquete si lo menciona, o null",
+  "needs_rag": true,
+  "summary": "Breve resumen de lo que el usuario quiere saber sobre la captura"
+}
+"""
+
 SYSTEM_PROMPT_PCAP_ANALYSIS = """
 Actúa como un Tutor Proactivo de Ciberseguridad. Tu objetivo no es solo resumir, sino DIRIGIR el aprendizaje del usuario basándote en este archivo .pcap:
 
@@ -594,28 +609,73 @@ def get_tutor_response(
 def get_pcap_analysis_response(
     pcap_data: dict,
     history: Optional[List[Dict[str, str]]] = None,
-) -> str:
-    prompt = SYSTEM_PROMPT_PCAP_ANALYSIS.format(pcap_summary=str(pcap_data))
+    user_message: Optional[str] = None
+) -> dict:
+    global rag
+    router_json = {}
 
-    messages_to_send = [{"role": "system", "content": prompt}]
-
-    if history:
-        messages_to_send.extend(history)
-    else:
-        messages_to_send.append(
-            {
-                "role": "user",
-                "content": "Analiza los datos del PCAP y guía mi aprendizaje de acuerdo a las reglas establecidas."
-            }
+    if user_message:
+        router_messages = [
+            {"role": "system", "content": SYSTEM_PROMPT_ANALYSIS_ROUTER},
+            {"role": "user", "content": f"MENSAJE ACTUAL:\n{user_message}"}
+        ]
+        if history:
+            historial_breve = history[-3:] if len(history) >= 3 else history
+            router_messages.insert(1, {"role": "system", "content": f"HISTORIAL RECIENTE:\n{json.dumps(historial_breve, ensure_ascii=False)}"})
+            
+        intent_response = client.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=router_messages,
+            temperature=0.1,
+            response_format={"type": "json_object"}
         )
+        
+        raw_router = intent_response.choices[0].message.content.strip()
+        router_json = safe_json_loads(raw_router)
+        
+        print("\n" + "=" * 80)
+        print("ANALYSIS CHAT ROUTER (GPT-120B) - INTENT:")
+        print("-" * 80)
+        print(_pretty(router_json, 2500))
+        print("=" * 80 + "\n")
+        
+        rag_context = ""
+        if router_json.get("needs_rag", True) and rag:
+            rag_context = rag.get_knowledge(user_message, topic="general")
+            
+        prompt = SYSTEM_PROMPT_PCAP_ANALYSIS.format(pcap_summary=str(pcap_data))
+        prompt += f"\n\nINTENCIÓN DEL USUARIO:\n{json.dumps(router_json, ensure_ascii=False)}"
+        if rag_context:
+            prompt += f"\n\nCONTEXTO TÉCNICO (RAG):\n{rag_context}"
+            
+        messages_to_send = [{"role": "system", "content": prompt}]
+        if history:
+            messages_to_send.extend(history)
+        messages_to_send.append({"role": "user", "content": user_message})
+        
+    else:
+        prompt = SYSTEM_PROMPT_PCAP_ANALYSIS.format(pcap_summary=str(pcap_data))
+        messages_to_send = [{"role": "system", "content": prompt}]
+        if history:
+            messages_to_send.extend(history)
+        else:
+            messages_to_send.append(
+                {
+                    "role": "user",
+                    "content": "Analiza los datos del PCAP y guía mi aprendizaje de acuerdo a las reglas establecidas."
+                }
+            )
 
     final_response = client.chat.completions.create(
-        model="openai/gpt-oss-120b",
+        model="llama-3.3-70b-versatile",
         messages=messages_to_send,
         temperature=0.2,
     )
 
-    return final_response.choices[0].message.content
+    return {
+        "response": final_response.choices[0].message.content,
+        "router": router_json
+    }
 
 # =========================
 # ESCENARIOS

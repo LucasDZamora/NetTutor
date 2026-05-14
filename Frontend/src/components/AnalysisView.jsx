@@ -127,6 +127,7 @@ export default function AnalysisView() {
       }
 
       const data = await response.json();
+      console.log("Router Intent (Analysis Chat):", data.router);
 
       setMessages(prev => [...prev, {
         role: 'assistant',

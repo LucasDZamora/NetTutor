@@ -49,6 +49,7 @@ class SimulatorRequest(BaseModel):
 app_state = {
     "is_ready": False,
     "init_error": None,
+    "pcaps": {}, # session_id -> pcap_data
     "phase": "starting",
 }
 
@@ -196,7 +197,14 @@ async def chat_endpoint(request: ChatRequest):
             for m in historial_db
             if m["nodo"] == request.nodo_actual
         ]
-        result = get_tutor_response(request.message, history=historial_nodo)
+        if request.nodo_actual == "analisis_pcap":
+            pcap_data = app_state["pcaps"].get(id_sesion)
+            if not pcap_data:
+                raise HTTPException(status_code=400, detail="No hay datos de PCAP en memoria para esta sesión. Sube el archivo nuevamente.")
+            result = get_pcap_analysis_response(pcap_data, history=historial_nodo, user_message=request.message)
+        else:
+            result = get_tutor_response(request.message, history=historial_nodo)
+            
         response_text = result["response"]
         router_debug = result["router"]
 
@@ -224,10 +232,13 @@ async def analyze_endpoint(email: str, file: UploadFile = File(...), nodo_actual
             return {"status": "error", "message": pcap_data}
 
         id_sesion = obtener_o_crear_sesion(email)
+        app_state["pcaps"][id_sesion] = pcap_data
+        
         user_msg = f"Archivo analizado: {file.filename}"
         guardar_mensaje_db(id_sesion, "user", user_msg, nodo_actual)
 
-        narrative = get_pcap_analysis_response(pcap_data)
+        result = get_pcap_analysis_response(pcap_data)
+        narrative = result["response"]
         guardar_mensaje_db(id_sesion, "assistant", narrative, nodo_actual)
 
         return {
