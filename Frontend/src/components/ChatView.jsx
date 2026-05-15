@@ -67,10 +67,12 @@ useEffect(() => {
       if (response.ok) {
         const data = await response.json();
         if (data.status === "success" && data.history) {
-          const historialFormateado = data.history.map(msg => ({
-            role: msg.role,
-            content: msg.content
-          }));
+          const historialFormateado = data.history
+            .filter(msg => msg.nodo === 'inicio')
+            .map(msg => ({
+              role: msg.role,
+              content: msg.content
+            }));
           setMessages(historialFormateado);
         }
       }

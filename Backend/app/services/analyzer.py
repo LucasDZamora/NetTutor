@@ -1,4 +1,5 @@
 import os
+# pyrefly: ignore [missing-import]
 from scapy.all import rdpcap, IP, TCP, UDP
 
 def analyze_pcap(file_path: str):
