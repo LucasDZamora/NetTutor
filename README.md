@@ -23,17 +23,30 @@ El backend requiere Python instalado en tu sistema.
 
 1. **Abre una terminal** y navega a la carpeta del backend:
    ```powershell
-   cd backend
+   cd Backend
    ```
-2. **Instala las dependencias**:
+2. **Crea el entorno virtual** (solo la primera vez):
+   ```powershell
+   python -m venv venv
+   ```
+3. **Activa el entorno virtual**:
+   ```powershell
+   .\venv\Scripts\Activate.ps1
+   ```
+   > ⚠️ Si ves un error de permisos, ejecuta primero:
+   > `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
+
+4. **Instala las dependencias**:
    Instala todas las librerías necesarias leyendo el archivo `requirements.txt`:
    ```powershell
    pip install -r requirements.txt
    ```
 
 ### ¿Cómo ejecutar el servidor Backend en el día a día?
-Cada vez que vayas a trabajar en el proyecto, abre tu terminal, navega a la carpeta `backend`, activa tu entorno y ejecuta:
+Cada vez que vayas a trabajar en el proyecto, abre tu terminal, navega a la carpeta `Backend`, **activa el entorno virtual** y ejecuta el servidor:
 ```powershell
+cd Backend
+.\venv\Scripts\Activate.ps1
 python -m uvicorn app.main:app --reload
 ```
 El backend estará corriendo en: `http://localhost:8000` (o el puerto que te indique la terminal).
@@ -77,7 +90,8 @@ Para que el proyecto completo funcione, necesitas **dos terminales abiertas**:
 
 **Terminal 1 (Backend):**
 ```powershell
-cd backend
+cd Backend
+.\venv\Scripts\Activate.ps1
 python -m uvicorn app.main:app --reload
 ```
 
