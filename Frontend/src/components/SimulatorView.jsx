@@ -78,6 +78,18 @@ export default function SimulatorView() {
     }
   }, [chatLog]);
 
+  useEffect(() => {
+    const savedLevel = localStorage.getItem("activeLevel");
+    if (savedLevel) {
+      const numericId = parseInt(savedLevel);
+      const levelKey = Object.keys(levelMap).find(key => levelMap[key] === numericId);
+      if (levelKey) {
+        loadAttack(levelKey);
+      }
+      localStorage.removeItem("activeLevel");
+    }
+  }, []);
+
   const sendSimChat = async () => {
     if (!inputValue.trim() || isSending || !currentLevel) return;
 

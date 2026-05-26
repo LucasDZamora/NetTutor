@@ -26,17 +26,21 @@ ALLOWED_TOPICS = {
 # =========================
 
 SYSTEM_PROMPT_GENERAL_ROUTER = """
-Eres el Router de Intenciones para el Chat General de NetTutor.
-Tu tarea es analizar la consulta del usuario y clasificarla.
+Eres el Router de Intenciones y Evaluador Cognitivo de NetTutor.
+Tu tarea es analizar el mensaje actual del usuario en el Chat General, clasificar su intención y evaluar su nivel de conocimiento.
 
-Debes responder SOLO en JSON válido.
+Si el usuario está respondiendo a una pregunta de evaluación o de diagnóstico técnico, debes analizar rigurosamente si demuestra un entendimiento correcto y suficiente del tema actual, o si por el contrario tiene dudas, conceptos erróneos o indica no saber.
+
+Debes responder SOLO en un objeto JSON válido.
 
 ESQUEMA JSON OBLIGATORIO:
 {
-  "intent": "ask_concept|request_analysis|troubleshoot|general_chat",
+  "intent": "ask_concept|answer_diagnostic|request_analysis|troubleshoot|general_chat",
   "topic": "port_scan|texto_plano|pop3|malware_c2|dos|http_phishing|general",
   "needs_rag": true,
-  "summary": "Breve resumen de lo que el usuario quiere lograr"
+  "summary": "Breve resumen de lo que el usuario quiere lograr o responde",
+  "diagnostic_evaluation": "known|unknown",  # Pon "known" si demuestra entender o responder bien la pregunta técnica de evaluación actual. Pon "unknown" si no sabe, se equivoca gravemente o responde de forma evasiva.
+  "user_demonstrates_understanding": true  # true si demuestra haber comprendido el concepto que se le está enseñando o valida correctamente la pregunta de control, false en caso contrario.
 }
 """
 
@@ -479,13 +483,49 @@ def get_tutor_response(
     user_message: str,
     pcap_data: Optional[Dict[str, Any]] = None,
     history: Optional[List[Dict[str, str]]] = None,
+    id_sesion: Optional[int] = None,
 ):
     global rag
 
     if rag is None:
         raise RuntimeError("RAG no inicializado todavía")
 
-    # 1. Router de intención con gpt-oss-120b
+    from app.services.chat_service import obtener_progreso_usuario, guardar_progreso_usuario
+
+    # 1. Obtener progreso del usuario (persistencia)
+    if id_sesion is not None:
+        progreso = obtener_progreso_usuario(id_sesion)
+    else:
+        # Fallback local para desarrollo o invitados
+        progreso = {
+            "stage": "global_diagnostic",
+            "diagnostic_step": 0,
+            "completed_topics": [],
+            "curriculum": [],
+            "current_topic": None,
+            "knowledge_level": {
+                "texto_plano": "unknown",
+                "http_phishing": "unknown",
+                "port_scan": "unknown",
+                "dos": "unknown",
+                "malware_c2": "unknown"
+            }
+        }
+
+    if "topic_messages_count" not in progreso:
+        progreso["topic_messages_count"] = 0
+
+    CURRICULUM_TOPICS = ["texto_plano", "http_phishing", "port_scan", "dos", "malware_c2"]
+    
+    TOPIC_DISPLAY_NAMES = {
+        "texto_plano": "Texto Plano (Telnet/FTP sin cifrar)",
+        "http_phishing": "HTTP y Cabeceras de Phishing",
+        "port_scan": "Escaneo de Puertos (Tráfico SYN)",
+        "dos": "Denegación de Servicio (DoS/Inundaciones)",
+        "malware_c2": "Malware y Canales de Comando y Control (C2)"
+    }
+
+    # 2. Router de intención con gpt-oss-120b
     router_messages = [
         {"role": "system", "content": SYSTEM_PROMPT_GENERAL_ROUTER},
         {"role": "user", "content": f"MENSAJE ACTUAL:\n{user_message}"}
@@ -504,18 +544,342 @@ def get_tutor_response(
     raw_router = intent_response.choices[0].message.content.strip()
     router_json = safe_json_loads(raw_router)
     
+    diagnostic_eval = router_json.get("diagnostic_evaluation", "unknown")
+    user_understands = router_json.get("user_demonstrates_understanding", False)
+
     raw_topic = router_json.get("topic", "general")
     topic = normalize_topic(raw_topic)
 
+    # 3. Máquina de Estados Pedagógica (Ruta Adaptativa)
+    DIAGNOSTIC_QUESTIONS = [
+        "¿Qué riesgos de seguridad corres si utilizas protocolos sin cifrar como Telnet o FTP para transmitir credenciales en una red, y cómo podrías detectarlo en un análisis de tráfico?",
+        "¿Cómo podrías identificar una solicitud maliciosa o un posible ataque de Phishing inspeccionando las cabeceras HTTP de una petición (por ejemplo, el Host, User-Agent o Referer)?",
+        "¿Qué patrón de paquetes o banderas (flags) de TCP buscarías en Wireshark/Scapy para confirmar que un atacante está realizando un escaneo de puertos SYN silencioso (Half-Open Scan)?",
+        "¿Qué características volumétricas y de flujo (como cantidad de paquetes por segundo, IPs de origen y puertos) diferencian el tráfico normal de un ataque de Denegación de Servicio (DoS) por inundación TCP SYN o UDP?",
+        "¿Qué es una conexión de tipo 'Beacon' o baliza en malware, por qué los atacantes la usan para comunicarse con servidores de Comando y Control (C2), y cómo se detecta analizando la frecuencia o intervalos del tráfico?"
+    ]
+
+    just_completed_topic = None
+    stage_instructions = ""
+
+    # Determinar si es el primer mensaje de la sesión (cuando el tutor aún no ha hecho ninguna pregunta)
+    has_assistant_messages = any(h.get("role") == "assistant" for h in (history or []))
+    is_first_message = not has_assistant_messages
+
+    if progreso["stage"] == "global_diagnostic":
+        step = progreso["diagnostic_step"]
+        
+        if not is_first_message:
+            # Evaluamos la respuesta a la pregunta formulada en el paso anterior (step)
+            evaluated_topic = CURRICULUM_TOPICS[step]
+            if diagnostic_eval == "known" or user_understands:
+                progreso["knowledge_level"][evaluated_topic] = "known"
+                if evaluated_topic not in progreso["completed_topics"]:
+                    progreso["completed_topics"].append(evaluated_topic)
+            else:
+                progreso["knowledge_level"][evaluated_topic] = "unknown"
+                if evaluated_topic not in progreso["curriculum"]:
+                    progreso["curriculum"].append(evaluated_topic)
+            
+            # Avanzar paso
+            progreso["diagnostic_step"] += 1
+            step = progreso["diagnostic_step"]
+
+        if step < 5:
+            # Aún quedan preguntas de diagnóstico
+            if is_first_message:
+                stage_instructions = f"""
+                Estás en la Bienvenida del Diagnóstico Global Inicial.
+                Tu tarea es dar una cordial bienvenida al estudiante a NetTutor y explicar que realizarás un rápido test de 5 preguntas (una por tema) para evaluar qué sabe y diseñar su ruta de aprendizaje personalizada.
+                
+                Formula explícita y textualmente la primera pregunta:
+                "**Pregunta 1: {TOPIC_DISPLAY_NAMES[CURRICULUM_TOPICS[0]]}**
+                {DIAGNOSTIC_QUESTIONS[0]}"
+                
+                No des explicaciones adicionales ni retroalimentación técnica aún. Solo dale la bienvenida y formula la pregunta.
+                """
+            else:
+                prev_topic_display = TOPIC_DISPLAY_NAMES[CURRICULUM_TOPICS[step - 1]]
+                stage_instructions = f"""
+                Estás en la prueba de Diagnóstico Global Inicial. Estás evaluando la pregunta {step} de 5.
+                
+                1. Agradece o da un feedback extremadamente breve y profesional (ej: "Entendido.", "Listo, anotado.", "Comprendo tu punto.") sobre su respuesta a la pregunta del tema anterior ({prev_topic_display}). NO des explicaciones técnicas ni lecciones en este punto.
+                2. Presenta textualmente la siguiente pregunta diagnóstica:
+                   "**Pregunta {step + 1}: {TOPIC_DISPLAY_NAMES[CURRICULUM_TOPICS[step]]}**
+                   {DIAGNOSTIC_QUESTIONS[step]}"
+                """
+        else:
+            # Diagnóstico terminado. Construir ruta personalizada.
+            # Los temas que no domina ya están en progreso["curriculum"].
+            # Si el currículum está vacío, el usuario sabe todo.
+            if not progreso["curriculum"]:
+                progreso["stage"] = "completed_all"
+                progreso["current_topic"] = None
+                stage_instructions = """
+                El estudiante ha respondido correctamente a todas las preguntas del diagnóstico inicial.
+                
+                1. Felicítalo de forma entusiasta por demostrar un excelente nivel técnico en ciberseguridad.
+                2. Explícale que su ruta adaptativa está completa de inmediato, y recomiéndale ir directamente al Simulador de Ataques y al Análisis PCAP para poner a prueba sus destrezas prácticas.
+                3. DEBES incluir las marcas interactivas al final de tu mensaje:
+                   `[RECOMENDACION:SIMULADOR:Nivel_1]` `[RECOMENDACION:SIMULADOR:Nivel_2]` `[RECOMENDACION:SIMULADOR:Nivel_3]` `[RECOMENDACION:SIMULADOR:Nivel_4]` `[RECOMENDACION:SIMULADOR:Nivel_5]` `[RECOMENDACION:PCAP]`
+                """
+            else:
+                progreso["stage"] = "teaching"
+                progreso["current_topic"] = progreso["curriculum"][0]
+                progreso["topic_messages_count"] = 0
+                
+                # Explicar resultado y comenzar lección del primer tema
+                display_active = TOPIC_DISPLAY_NAMES[progreso["current_topic"]]
+                completed_names = [TOPIC_DISPLAY_NAMES[t] for t in progreso["completed_topics"]]
+                completed_str = ", ".join(completed_names) if completed_names else "ninguno"
+                
+                stage_instructions = f"""
+                ¡El diagnóstico global ha finalizado!
+                
+                1. Informa de forma ejecutiva al estudiante sobre los resultados de su evaluación diagnóstica. Menciónale que dominó los temas: **{completed_str}** (los cuales se marcan como aprobados en su stepper superior), pero que nos enfocaremos en sus áreas de oportunidad.
+                2. El tema activo para comenzar su enseñanza personalizada es: **{display_active}**.
+                3. Inicia directamente la lección de este tema, explicando los conceptos clave de manera estructurada y profesional (puedes apoyarte en la información del RAG).
+                4. Haz una pregunta abierta corta para involucrarlo.
+                """
+
+    elif progreso["stage"] == "teaching":
+        progreso["topic_messages_count"] += 1
+        current_topic = progreso["current_topic"]
+        display_active = TOPIC_DISPLAY_NAMES[current_topic]
+        
+        # Si ya interactuó suficiente en enseñanza (2 turnos) o el router detecta que responde adecuadamente,
+        # pasamos al Mini-Test de 3 preguntas.
+        if progreso["topic_messages_count"] >= 2 or user_understands or router_json.get("intent") == "answer_diagnostic":
+            progreso["stage"] = "mini_test"
+            progreso["test_step"] = 0
+            
+            # Definir Mini-Tests de 3 preguntas rápidas
+            MINI_TEST_QUESTIONS = {
+                "texto_plano": [
+                    "¿Por qué protocolos como FTP y Telnet se consideran inseguros y qué herramienta de sniffing se usa comúnmente para capturar sus credenciales?",
+                    "Si estás analizando un paquete en texto plano en Wireshark, ¿en qué capa del modelo OSI/TCP-IP se encuentran expuestos los datos legibles del usuario?",
+                    "¿Qué protocolo seguro cifrado deberías usar para reemplazar a Telnet y cuál para reemplazar a FTP?"
+                ],
+                "http_phishing": [
+                    "Si haces clic en un enlace de phishing, ¿qué cabecera HTTP (como Host o Referer) se revelará en la petición y cómo ayuda a detectar la suplantación?",
+                    "¿Qué campo de cabecera HTTP describe el navegador o agente de usuario que realiza la petición y suele ser falsificado por atacantes?",
+                    "¿Cómo ayuda el cifrado y los certificados de HTTPS a mitigar que un atacante suplante por completo la identidad de un sitio web legítimo?"
+                ],
+                "port_scan": [
+                    "¿Qué banderas (flags) TCP se envían de origen y se reciben de respuesta en un escaneo SYN (Half-Open Scan) cuando un puerto está abierto?",
+                    "¿Qué respuesta (flag) TCP envía el host víctima si el puerto escaneado está cerrado?",
+                    "¿Por qué un escaneo SYN se considera más silencioso y evasivo que un escaneo de conexión completa (Full Connect Scan)?"
+                ],
+                "dos": [
+                    "¿Qué diferencia técnica principal hay entre un ataque DoS (Denegación de Servicio) y un ataque DDoS (Distribuido)?",
+                    "¿Cómo satura un ataque SYN Flood la memoria del servidor víctima y qué flag TCP nunca envía el atacante para completar la conexión?",
+                    "¿Menciona una medida de mitigación técnica en red para proteger a un servidor contra inundaciones masivas de tráfico SYN?"
+                ],
+                "malware_c2": [
+                    "¿Qué es un 'C2 Server' (servidor de Comando y Control) y qué función cumple para un malware infiltrado?",
+                    "¿Qué es el 'beaconing' o balizamiento en comunicaciones de malware y por qué los atacantes usan intervalos de tiempo con 'jitter' (aleatoriedad)?",
+                    "Si una IP interna realiza conexiones DNS constantes a dominios extraños generados algorítmicamente (DGA), ¿qué fase del ataque se está presenciando?"
+                ]
+            }
+            q_list = MINI_TEST_QUESTIONS.get(current_topic, ["¿Cómo mitigarías esta vulnerabilidad?"] * 3)
+            
+            stage_instructions = f"""
+            ¡Comienza el Mini-Test de 3 preguntas para el tema '{display_active}'!
+            
+            REGLAS ABSOLUTAS DE ESTA ETAPA (MINI-TEST):
+            1. Explica de forma directa que ha llegado el momento del Mini-Test para evaluar su comprensión de '{display_active}'.
+            2. Presenta de forma clara, explícita y textualmente la **Pregunta 1 de 3** de este Mini-Test para '{display_active}':
+               "**Pregunta 1 de 3:** {q_list[0]}"
+            3. Indícale claramente al estudiante que debe responder correctamente 3 preguntas consecutivas para poder aprobar el tema.
+            4. TIENES ESTRICTAMENTE PROHIBIDO incluir marcas de recomendación como `[RECOMENDACION:...]` en esta respuesta.
+            5. TIENES ESTRICTAMENTE PROHIBIDO sugerir cambiar de tema o avanzar a otros temas como Phishing o DoS.
+            """
+        else:
+            stage_instructions = f"""
+            Estás enseñando el tema activo: '{display_active}'.
+            
+            REGLAS ABSOLUTAS DE ESTA ETAPA (ENSEÑANZA):
+            1. Continúa explicando de forma clara, directa y práctica el concepto, basándote en la información del RAG.
+            2. Corrige cualquier duda técnica o error que haya mostrado en su mensaje actual.
+            3. TIENES ESTRICTAMENTE PROHIBIDO incluir marcas de recomendación como `[RECOMENDACION:SIMULADOR:...]` o `[RECOMENDACION:PCAP]`. Las recomendaciones están estrictamente prohibidas en la fase de enseñanza.
+            4. TIENES ESTRICTAMENTE PROHIBIDO sugerir cambiar de tema o avanzar a otros temas (como Phishing). Concéntrate exclusivamente en '{display_active}'.
+            5. Adviértele de forma amigable que una vez cubiertas las explicaciones, le harás un **Mini-Test de 3 preguntas rápidas** para validar su aprendizaje y poder avanzar.
+            6. Termina preguntándole si tiene alguna duda técnica sobre el concepto o si está listo para comenzar el **Mini-Test**.
+            """
+
+    elif progreso["stage"] == "mini_test":
+        current_topic = progreso["current_topic"]
+        display_active = TOPIC_DISPLAY_NAMES[current_topic]
+        step = progreso["test_step"]
+        
+        # Definir Mini-Tests de 3 preguntas rápidas
+        MINI_TEST_QUESTIONS = {
+            "texto_plano": [
+                "¿Por qué protocolos como FTP y Telnet se consideran inseguros y qué herramienta de sniffing se usa comúnmente para capturar sus credenciales?",
+                "Si estás analizando un paquete en texto plano en Wireshark, ¿en qué capa del modelo OSI/TCP-IP se encuentran expuestos los datos legibles del usuario?",
+                "¿Qué protocolo seguro cifrado deberías usar para reemplazar a Telnet y cuál para reemplazar a FTP?"
+            ],
+            "http_phishing": [
+                "Si haces clic en un enlace de phishing, ¿qué cabecera HTTP (como Host o Referer) se revelará en la petición y cómo ayuda a detectar la suplantación?",
+                "¿Qué campo de cabecera HTTP describe el navegador o agente de usuario que realiza la petición y suele ser falsificado por atacantes?",
+                "¿Cómo ayuda el cifrado y los certificados de HTTPS a mitigar que un atacante suplante por completo la identidad de un sitio web legítimo?"
+            ],
+            "port_scan": [
+                "¿Qué banderas (flags) TCP se envían de origen y se reciben de respuesta en un escaneo SYN (Half-Open Scan) cuando un puerto está abierto?",
+                "¿Qué respuesta (flag) TCP envía el host víctima si el puerto escaneado está cerrado?",
+                "¿Por qué un escaneo SYN se considera más silencioso y evasivo que un escaneo de conexión completa (Full Connect Scan)?"
+            ],
+            "dos": [
+                "¿Qué diferencia técnica principal hay entre un ataque DoS (Denegación de Servicio) y un ataque DDoS (Distribuido)?",
+                "¿Cómo satura un ataque SYN Flood la memoria del servidor víctima y qué flag TCP nunca envía el atacante para completar la conexión?",
+                "¿Menciona una medida de mitigación técnica en red para proteger a un servidor contra inundaciones masivas de tráfico SYN?"
+            ],
+            "malware_c2": [
+                "¿Qué es un 'C2 Server' (servidor de Comando y Control) y qué función cumple para un malware infiltrado?",
+                "¿Qué es el 'beaconing' o balizamiento en comunicaciones de malware y por qué los atacantes usan intervalos de tiempo con 'jitter' (aleatoriedad)?",
+                "Si una IP interna realiza conexiones DNS constantes a dominios extraños generados algorítmicamente (DGA), ¿qué fase del ataque se está presenciando?"
+            ]
+        }
+        q_list = MINI_TEST_QUESTIONS.get(current_topic, ["¿Cómo mitigarías esta vulnerabilidad?"] * 3)
+        
+        if user_understands or diagnostic_eval == "known":
+            # Pregunta contestada correctamente!
+            progreso["test_step"] += 1
+            new_step = progreso["test_step"]
+            
+            if new_step < 3:
+                # Siguiente pregunta del test
+                stage_instructions = f"""
+                El estudiante está rindiendo el Mini-Test de '{display_active}'. Está respondiendo a la pregunta {new_step + 1} de 3.
+                
+                REGLAS ABSOLUTAS DE ESTA ETAPA (EVALUACIÓN):
+                1. Felicítalo muy brevemente por responder correctamente a la pregunta anterior.
+                2. Presenta de forma clara y destacada la siguiente pregunta del test (**Pregunta {new_step + 1} de 3**):
+                   "**Pregunta {new_step + 1} de 3:** {q_list[new_step]}"
+                3. TIENES ESTRICTAMENTE PROHIBIDO dar explicaciones largas o de relleno.
+                4. TIENES ESTRICTAMENTE PROHIBIDO incluir marcas de recomendación como `[RECOMENDACION:...]` en esta respuesta.
+                5. TIENES ESTRICTAMENTE PROHIBIDO sugerir cambiar de tema o avanzar a otros temas.
+                """
+            else:
+                # ¡Mini-Test aprobado y completado con éxito!
+                just_completed_topic = current_topic
+                if just_completed_topic not in progreso["completed_topics"]:
+                    progreso["completed_topics"].append(just_completed_topic)
+                if just_completed_topic in progreso["curriculum"]:
+                    progreso["curriculum"].remove(just_completed_topic)
+                    
+                # Resetear pasos del test
+                progreso["test_step"] = 0
+                
+                # Buscar el siguiente tema
+                if progreso["curriculum"]:
+                    progreso["stage"] = "teaching"
+                    progreso["current_topic"] = progreso["curriculum"][0]
+                    progreso["topic_messages_count"] = 0
+                    display_next = TOPIC_DISPLAY_NAMES[progreso["current_topic"]]
+                    
+                    level_map = {
+                        "texto_plano": "Nivel_1",
+                        "http_phishing": "Nivel_2",
+                        "port_scan": "Nivel_3",
+                        "dos": "Nivel_4",
+                        "malware_c2": "Nivel_5"
+                    }
+                    rec_level = level_map.get(just_completed_topic, "Nivel_1")
+                    
+                    stage_instructions = f"""
+                    ¡ATENCIÓN TUTOR!: El estudiante ha aprobado con éxito todas las preguntas del Mini-Test de '{display_active}', completándolo al 100%.
+                    El siguiente tema a aprender es: '{display_next}'.
+                    
+                    DEBES HACER LO SIGUIENTE EXACTAMENTE:
+                    1. Felicítalo cordialmente por aprobar el Mini-Test y dominar el tema: '{display_active}'.
+                    2. Recomiéndale explícitamente poner en práctica lo aprendido en este tema específico usando las marcas interactivas del frontend al final de tu mensaje:
+                       - Ir al Simulador: `[RECOMENDACION:SIMULADOR:{rec_level}]`
+                       - Ir al Análisis de Capturas: `[RECOMENDACION:PCAP]`
+                    3. De manera fluida en el mismo mensaje, introduce y da inicio al siguiente tema de la ruta adaptada: '{display_next}', formulando una explicación inicial o una primera pregunta para comenzar.
+                    """
+                else:
+                    progreso["stage"] = "completed_all"
+                    progreso["current_topic"] = None
+                    
+                    level_map = {
+                        "texto_plano": "Nivel_1",
+                        "http_phishing": "Nivel_2",
+                        "port_scan": "Nivel_3",
+                        "dos": "Nivel_4",
+                        "malware_c2": "Nivel_5"
+                    }
+                    rec_level = level_map.get(just_completed_topic, "Nivel_1")
+                    
+                    stage_instructions = f"""
+                    ¡ATENCIÓN TUTOR!: El estudiante ha aprobado el Mini-Test del tema '{display_active}', completándolo al 100%. Con esto, ha terminado TODOS los temas de su ruta adaptativa.
+                    
+                    DEBES HACER LO SIGUIENTE EXACTAMENTE:
+                    1. Felicítalo calurosamente por completar de forma excelente todo el Mini-Test de '{display_active}' y finalizar con éxito toda su ruta de aprendizaje adaptada en NetTutor.
+                    2. Recomiéndale realizar la práctica técnica interactiva en los módulos reales usando las marcas:
+                       - Ir al Simulador: `[RECOMENDACION:SIMULADOR:{rec_level}]`
+                       - Ir al Análisis de Capturas: `[RECOMENDACION:PCAP]`
+                    3. Motívalo a seguir explorando y experimentando en ciberseguridad.
+                    """
+        else:
+            # Falló alguna de las preguntas del test. Lo regresamos a teaching para reforzar.
+            progreso["stage"] = "teaching"
+            progreso["topic_messages_count"] = 0
+            progreso["test_step"] = 0 # Reiniciar progreso del test
+            
+            stage_instructions = f"""
+            El estudiante ha respondido de forma INCORRECTA o incompleta a la Pregunta {step + 1} del Mini-Test del tema: '{display_active}'.
+            
+            DEBES HACER LO SIGUIENTE EXACTAMENTE:
+            1. Explícale detalladamente en qué consistía el error de su respuesta y cuál era el concepto técnico correcto (apóyate en el RAG).
+            2. Infórmale con tono alentador que regresamos temporalmente a la fase de enseñanza para reforzar el tema y que podrá intentar el Mini-Test de 3 preguntas completas de nuevo cuando esté listo.
+            3. TIENES ESTRICTAMENTE PROHIBIDO incluir marcas de recomendación `[RECOMENDACION:...]` en esta respuesta.
+            4. Haz una pregunta aclaratoria más sencilla para asegurar que asimile la base antes de continuar.
+            """
+
+    # 4. Guardar progreso actualizado en base de datos
+    if id_sesion is not None:
+        guardar_progreso_usuario(id_sesion, progreso)
+
+    # 5. Obtener contexto RAG
     rag_context = ""
+    active_topic = progreso["current_topic"] or topic
     if router_json.get("needs_rag", True):
-        rag_context = rag.get_knowledge(user_message, topic=topic)
+        rag_context = rag.get_knowledge(user_message, topic=active_topic)
 
     pcap_context = f"Datos de Scapy: {pcap_data}" if pcap_data else "No hay archivo subido aún."
 
-    full_system_prompt = SYSTEM_PROMPT_GENERAL_TUTOR.format(
-        intent_json=json.dumps(router_json, ensure_ascii=False)
-    ) + f"\n\nCONTEXTO TÉCNICO (RAG):\n{rag_context if rag_context else 'No se recuperó contexto técnico adicional.'}\n\nDATOS DE LA CAPTURA (SCAPY):\n{pcap_context}"
+    # 6. Construir prompt del tutor estructurado
+    # Reemplazar el prompt base con el prompt adaptativo
+    SYSTEM_PROMPT_GENERAL_TUTOR_ADAPTIVE = """
+Eres un Tutor Experto y Directivo en Ciberseguridad en NetTutor.
+Tu objetivo es guiar al estudiante de forma clara, directa y altamente pedagógica a través de un plan de estudio adaptativo.
+
+ESTADO DE APRENDIZAJE DEL ESTUDIANTE:
+{progreso_json}
+
+REGLAS GENERALES:
+1. Mantén siempre un tono profesional, experto y motivador. Sé directo, claro y no des explicaciones excesivamente largas o de relleno.
+2. Si el estudiante se equivoca o no sabe algo, corrígelo con amabilidad dando la respuesta correcta directamente en vez de ser críptico o evasivo.
+3. Si recomiendas pasar a la práctica, utiliza las siguientes marcas textuales exactas al final de tu mensaje para que el frontend pueda renderizar tarjetas premium interactivas:
+   - Para recomendar el Simulador de Ataques: `[RECOMENDACION:SIMULADOR:Nivel_X]` (donde X es del 1 al 5 correspondiente al tema).
+     * Tema 'texto_plano' -> `[RECOMENDACION:SIMULADOR:Nivel_1]`
+     * Tema 'http_phishing' -> `[RECOMENDACION:SIMULADOR:Nivel_2]`
+     * Tema 'port_scan' -> `[RECOMENDACION:SIMULADOR:Nivel_3]`
+     * Tema 'dos' -> `[RECOMENDACION:SIMULADOR:Nivel_4]`
+     * Tema 'malware_c2' -> `[RECOMENDACION:SIMULADOR:Nivel_5]`
+   - Para recomendar el Análisis PCAP: `[RECOMENDACION:PCAP]`
+   - Asegúrate de incluir el texto explicativo y de motivación al lado de las marcas, por ejemplo:
+     "¡Excelente trabajo completando este módulo! Te recomiendo poner en práctica lo aprendido en el simulador: [RECOMENDACION:SIMULADOR:Nivel_1] o analizando una captura de red real: [RECOMENDACION:PCAP]"
+
+INSTRUCCIONES DE ETAPA ACTUAL:
+{stage_instructions}
+"""
+
+    full_system_prompt = SYSTEM_PROMPT_GENERAL_TUTOR_ADAPTIVE.format(
+        progreso_json=json.dumps(progreso, ensure_ascii=False, indent=2),
+        stage_instructions=stage_instructions
+    ) + f"\n\nCONTEXTO TÉCNICO RAG:\n{rag_context if rag_context else 'No se recuperó contexto adicional.'}\n\nDATOS DE CAPTURA PCAP:\n{pcap_context}"
 
     messages_to_send = [{"role": "system", "content": full_system_prompt}]
     if history:
@@ -528,9 +892,11 @@ def get_tutor_response(
         messages=messages_to_send,
         temperature=0.2,
     )
+    
     return {
         "response": final_response.choices[0].message.content,
-        "router": router_json
+        "router": router_json,
+        "progreso": progreso
     }
 
 # =========================

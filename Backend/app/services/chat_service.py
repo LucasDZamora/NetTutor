@@ -92,6 +92,13 @@ def cargar_historial_db(id_sesion: int):
 
 def borrar_historial_db(id_sesion: int, nodo: str):
     try:
+        if nodo == "inicio":
+            supabase.table("Historial_chat")\
+                .delete()\
+                .eq("id_sesion", id_sesion)\
+                .eq("nodo_pedagogico", "progreso_usuario")\
+                .execute()
+
         supabase.table("Historial_chat")\
             .delete()\
             .eq("id_sesion", id_sesion)\
@@ -101,3 +108,48 @@ def borrar_historial_db(id_sesion: int, nodo: str):
     except Exception as e:
         print(f"❌ Error al borrar historial: {e}")
         return False
+
+def obtener_progreso_usuario(id_sesion: int) -> dict:
+    import json
+    try:
+        res = supabase.table("Historial_chat")\
+            .select("contenido")\
+            .eq("id_sesion", id_sesion)\
+            .eq("nodo_pedagogico", "progreso_usuario")\
+            .order("enviado_en", desc=True)\
+            .limit(1)\
+            .execute()
+        
+        if res.data:
+            return json.loads(res.data[0]["contenido"])
+    except Exception as e:
+        print(f"⚠️ Error al obtener progreso de usuario: {e}")
+    
+    # Progreso por defecto (Diagnóstico Global Inicial)
+    return {
+        "stage": "global_diagnostic",
+        "diagnostic_step": 0,
+        "completed_topics": [],
+        "curriculum": [],
+        "current_topic": None,
+        "knowledge_level": {
+            "texto_plano": "unknown",
+            "http_phishing": "unknown",
+            "port_scan": "unknown",
+            "dos": "unknown",
+            "malware_c2": "unknown"
+        }
+    }
+
+def guardar_progreso_usuario(id_sesion: int, progreso: dict):
+    import json
+    try:
+        supabase.table("Historial_chat").insert({
+            "id_sesion": id_sesion,
+            "rol": 2, # Asistente/Sistema
+            "contenido": json.dumps(progreso, ensure_ascii=False),
+            "nodo_pedagogico": "progreso_usuario",
+            "enviado_en": datetime.now().isoformat()
+        }).execute()
+    except Exception as e:
+        print(f"❌ Error al guardar progreso de usuario: {e}")

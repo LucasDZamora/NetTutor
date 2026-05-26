@@ -1,16 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-export default function ChatView() {
+export default function ChatView({ currentUser, switchView }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [backendReady, setBackendReady] = useState(false);
   const [backendMessage, setBackendMessage] = useState('Inicializando tutor...');
+  const [progress, setProgress] = useState(null);
 
   const scrollRef = useRef(null);
   const userEmail = localStorage.getItem("userEmail");
 
-  
   // =========================
   // AUTO SCROLL
   // =========================
@@ -50,48 +50,102 @@ export default function ChatView() {
   }, []);
 
   // =========================
-  // CARGAR HISTORIAL
+  // CARGAR PROGRESO DE USUARIO
   // =========================
-useEffect(() => {
-  const cargarHistorial = async () => {
-    // Buscamos el email justo cuando el componente se monta
+  const fetchProgress = async () => {
     const emailEnStorage = localStorage.getItem("userEmail");
-
-    if (!emailEnStorage || emailEnStorage === "undefined") {
-      setMessages([]);
-      return;
-    }
+    if (!emailEnStorage || emailEnStorage === "undefined") return;
 
     try {
-      const response = await fetch(`http://localhost:8000/api/chat/history/${emailEnStorage}`);
+      const response = await fetch(`http://localhost:8000/api/chat/progress/${encodeURIComponent(emailEnStorage)}`);
       if (response.ok) {
         const data = await response.json();
-        if (data.status === "success" && data.history) {
-          const historialFormateado = data.history
-            .filter(msg => msg.nodo === 'inicio')
-            .map(msg => ({
-              role: msg.role,
-              content: msg.content
-            }));
-          setMessages(historialFormateado);
+        if (data.status === "success" && data.progreso) {
+          setProgress(data.progreso);
         }
       }
     } catch (error) {
-      console.error("Error al cargar:", error);
+      console.error("Error al cargar progreso:", error);
+    }
+  };
+  // =========================
+  // INICIALIZAR EVALUACION PROACTIVA
+  // =========================
+  const inicializarEvaluacion = async (email) => {
+    setIsLoading(true);
+    try {
+      const response = await fetch('http://localhost:8000/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: email,
+          message: "Hola, me gustaría comenzar el test de diagnóstico inicial.",
+          nodo_actual: "inicio"
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.progreso) {
+          setProgress(data.progreso);
+        }
+        setMessages([
+          { role: 'user', content: "Hola, me gustaría comenzar el test de diagnóstico inicial." },
+          { role: 'assistant', content: data.response || 'El tutor no devolvió contenido.' }
+        ]);
+      }
+    } catch (error) {
+      console.error("Error al inicializar evaluación:", error);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  cargarHistorial();
-}, []);
+  // =========================
+  // CARGAR HISTORIAL
+  // =========================
+  useEffect(() => {
+    const cargarHistorial = async () => {
+      const emailEnStorage = localStorage.getItem("userEmail");
 
+      if (!emailEnStorage || emailEnStorage === "undefined") {
+        setMessages([]);
+        return;
+      }
+
+      try {
+        const response = await fetch(`http://localhost:8000/api/chat/history/${emailEnStorage}`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.status === "success" && data.history) {
+            const historialFormateado = data.history
+              .filter(msg => msg.nodo === 'inicio')
+              .map(msg => ({
+                role: msg.role,
+                content: msg.content
+              }));
+            setMessages(historialFormateado);
+
+            // Si el historial está vacío, iniciamos automáticamente la primera pregunta diagnóstica
+            if (historialFormateado.length === 0) {
+              inicializarEvaluacion(emailEnStorage);
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Error al cargar historial:", error);
+      }
+    };
+
+    cargarHistorial();
+    fetchProgress();
+  }, []);
   // =========================
   // ENVIAR MENSAJE
   // =========================
   const handleSend = async () => {
-    // 1. Obtener el email actualizado justo en el momento del click
     const emailActual = localStorage.getItem("userEmail");
 
-    // 2. Validaciones previas
     if (!emailActual || emailActual === "undefined") {
       alert("Error: No se detectó tu sesión. Por favor, inicia sesión de nuevo.");
       return;
@@ -119,7 +173,7 @@ useEffect(() => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email: emailActual, // Enviamos el email verificado
+          email: emailActual,
           message: userMsg,
           nodo_actual: "inicio"
         })
@@ -132,6 +186,10 @@ useEffect(() => {
 
       const data = await response.json();
       console.log("Router Intent (General Chat):", data.router);
+
+      if (data.progreso) {
+        setProgress(data.progreso);
+      }
 
       setMessages(prev => [...prev, {
         role: 'assistant',
@@ -149,10 +207,10 @@ useEffect(() => {
   };
 
   // =========================
-  // BORRAR HISTORIAL
+  // BORRAR HISTORIAL / RESET
   // =========================
   const handleDeleteHistory = async () => {
-    if (!window.confirm("¿Estás seguro de que deseas borrar todo el historial de este chat?")) return;
+    if (!window.confirm("¿Estás seguro de que deseas borrar todo el historial y reiniciar tu ruta de aprendizaje adaptada?")) return;
     
     const emailActual = localStorage.getItem("userEmail");
     if (!emailActual || emailActual === "undefined") return;
@@ -163,6 +221,8 @@ useEffect(() => {
       });
       if (res.ok) {
         setMessages([]);
+        setProgress(null);
+        inicializarEvaluacion(emailActual);
       } else {
         alert("Error al borrar el historial");
       }
@@ -172,19 +232,28 @@ useEffect(() => {
   };
 
   // =========================
-  // MONITOR DE SESIÓN (NUEVO)
+  // MONITOR DE SESIÓN
   // =========================
   useEffect(() => {
     const emailEnStorage = localStorage.getItem("userEmail");
-    
-    // Si no hay email (deslogueo), limpiamos los mensajes inmediatamente
     if (!emailEnStorage || emailEnStorage === "undefined") {
       setMessages([]);
+      setProgress(null);
     }
-  }, [localStorage.getItem("userEmail")]); // Se ejecuta cuando cambia el email
+  }, [localStorage.getItem("userEmail")]);
 
-  // Obtenemos el email solo para mostrarlo en el Header (UI)
   const displayEmail = localStorage.getItem("userEmail") || "Invitado";
+
+  // =========================
+  // DATOS DEL STEPPER
+  // =========================
+  const topics = [
+    { id: "texto_plano", name: "Texto Plano", desc: "Red sin cifrar" },
+    { id: "http_phishing", name: "Phishing", desc: "Cabeceras HTTP" },
+    { id: "port_scan", name: "Port Scan", desc: "Ráfagas SYN" },
+    { id: "dos", name: "DDoS", desc: "Saturación host" },
+    { id: "malware_c2", name: "Malware C2", desc: "Beacons y control" }
+  ];
 
   return (
     <div className="h-full flex flex-col items-center justify-center p-6 fade-in">
@@ -208,12 +277,13 @@ useEffect(() => {
                 onClick={handleDeleteHistory}
                 disabled={isLoading}
                 className="bg-red-50 text-red-600 hover:bg-red-100 px-3 py-1.5 rounded-xl font-bold shadow-sm transition-all flex items-center gap-2 text-xs border border-red-200"
-                title="Borrar Historial"
+                title="Reiniciar Progreso y Chat"
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1 1 21.21 7.89" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M17 9.89h5v-5" />
                 </svg>
-                Borrar
+                Reiniciar Ruta
               </button>
             )}
             <div className={`text-xs font-bold px-3 py-1 rounded-full ${
@@ -224,6 +294,79 @@ useEffect(() => {
           </div>
         </div>
 
+        {/* STEPPER / DIAGNOSTIC PROGRESS AREA */}
+        {progress && (
+          <div className="flex-shrink-0">
+            {progress.stage === "global_diagnostic" ? (
+              // Barra de diagnóstico inicial
+              <div className="w-full bg-slate-900 text-white p-4 px-6 border-b border-slate-800 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-2 h-2 rounded-full bg-indigo-500 animate-ping"></div>
+                  <div>
+                    <h4 className="text-[10px] font-bold tracking-wider text-indigo-400 uppercase">Test de Diagnóstico Inicial</h4>
+                    <p className="text-[10px] text-slate-400 mt-0.5">Construyendo tu ruta de aprendizaje adaptada</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-4 flex-1 max-w-xs justify-end">
+                  <span className="text-[10px] font-bold text-slate-300">Pregunta {Math.min((progress.diagnostic_step || 0) + 1, 5)} de 5</span>
+                  <div className="w-24 bg-slate-800 h-1.5 rounded-full overflow-hidden border border-slate-700/50">
+                    <div 
+                      className="bg-gradient-to-r from-indigo-500 to-purple-500 h-full rounded-full transition-all duration-500" 
+                      style={{ width: `${((progress.diagnostic_step || 0) / 5) * 100}%` }}
+                    ></div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              // Stepper curricular premium
+              <div className="w-full bg-slate-900 p-4 border-b border-slate-800 overflow-x-auto select-none">
+                <div className="flex items-center justify-between min-w-[650px] max-w-3xl mx-auto px-4">
+                  {topics.map((t, idx) => {
+                    const isCompleted = progress.completed_topics?.includes(t.id);
+                    const isActive = progress.current_topic === t.id;
+                    
+                    return (
+                      <React.Fragment key={t.id}>
+                        {/* NODE */}
+                        <div className="flex flex-col items-center flex-1 relative group">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-[10px] shadow border transition-all duration-300 ${
+                            isCompleted 
+                              ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-emerald-950/20' 
+                              : isActive
+                                ? 'bg-indigo-600 border-indigo-400 text-white ring-4 ring-indigo-500/25 shadow-indigo-900/40 animate-pulse'
+                                : 'bg-slate-800 border-slate-700 text-slate-500 shadow-slate-950/25'
+                          }`}>
+                            {isCompleted ? '✓' : idx + 1}
+                          </div>
+                          <span className={`text-[10px] font-bold mt-1.5 transition-colors ${
+                            isCompleted 
+                              ? 'text-emerald-400' 
+                              : isActive 
+                                ? 'text-indigo-400 font-extrabold' 
+                                : 'text-slate-500'
+                          }`}>{t.name}</span>
+                          <span className="text-[8px] text-slate-600 mt-0.5 opacity-60 hidden md:block">{t.desc}</span>
+                        </div>
+                        
+                        {/* CONNECTOR LINE */}
+                        {idx < topics.length - 1 && (
+                          <div className={`h-[1px] flex-1 min-w-[20px] transition-all duration-500 ${
+                            isCompleted && progress.completed_topics?.includes(topics[idx + 1].id)
+                              ? 'bg-gradient-to-r from-emerald-500 to-emerald-500'
+                              : isCompleted
+                                ? 'bg-gradient-to-r from-emerald-500 to-slate-800'
+                                : 'bg-slate-800'
+                          }`} />
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* CHAT AREA */}
         <div ref={scrollRef} className="flex-1 p-8 space-y-6 overflow-y-auto custom-scrollbar min-h-0 bg-slate-50/30">
           {messages.length === 0 && (
@@ -232,17 +375,72 @@ useEffect(() => {
             </p>
           )}
 
-          {messages.map((m, i) => (
-            <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[80%] p-4 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
-                m.role === 'user'
-                  ? 'bg-indigo-600 text-white shadow-md rounded-tr-none'
-                  : 'bg-white border border-gray-200 text-gray-800 shadow-sm rounded-tl-none'
-              }`}>
-                {m.content}
+          {messages.map((m, i) => {
+            const isUser = m.role === 'user';
+            let displayContent = m.content;
+            let containsSim = null;
+            let containsPcap = false;
+
+            if (!isUser) {
+              containsSim = m.content.match(/\[RECOMENDACION:SIMULADOR:(Nivel_\d)\]/);
+              containsPcap = m.content.includes("[RECOMENDACION:PCAP]");
+              displayContent = m.content
+                .replace(/\[RECOMENDACION:SIMULADOR:Nivel_\d\]/g, "")
+                .replace(/\[RECOMENDACION:PCAP\]/g, "")
+                .trim();
+            }
+
+            return (
+              <div key={i} className={`flex ${isUser ? 'justify-end' : 'justify-start'} animate-fade-in`}>
+                <div className={`max-w-[80%] p-4 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
+                  isUser
+                    ? 'bg-indigo-600 text-white shadow-md rounded-tr-none'
+                    : 'bg-white border border-gray-200 text-gray-800 shadow-sm rounded-tl-none'
+                }`}>
+                  <div>{displayContent}</div>
+                  
+                  {!isUser && (containsSim || containsPcap) && (
+                    <div className="mt-4 pt-4 border-t border-gray-100 flex flex-col gap-2">
+                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">
+                        Práctica Recomendada:
+                      </span>
+                      <div className="flex flex-wrap gap-2 mt-1">
+                        {containsSim && (
+                          <button
+                            onClick={() => {
+                              const nivelStr = containsSim[1];
+                              const nivelId = parseInt(nivelStr.split("_")[1]);
+                              localStorage.setItem("activeLevel", nivelId);
+                              if (switchView) switchView('sim');
+                            }}
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-2 px-4 rounded-xl shadow transition-all flex items-center gap-2 transform hover:-translate-y-0.5"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                            </svg>
+                            🎯 Ir al Simulador: Nivel {containsSim[1].split("_")[1]}
+                          </button>
+                        )}
+                        {containsPcap && (
+                          <button
+                            onClick={() => {
+                              if (switchView) switchView('analysis');
+                            }}
+                            className="bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs py-2 px-4 rounded-xl shadow transition-all flex items-center gap-2 transform hover:-translate-y-0.5"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            🔍 Ir a Analizar PCAP
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
 
           {isLoading && (
             <div className="flex justify-start">
@@ -262,7 +460,7 @@ useEffect(() => {
               disabled={!backendReady || isLoading}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-              placeholder={backendReady ? 'Escribe tu duda técnica aquí...' : 'Esperando al tutor...'}
+              placeholder={backendReady ? 'Escribe tu duda o respuesta técnica aquí...' : 'Esperando al tutor...'}
               className="flex-1 bg-gray-100 border-none rounded-2xl py-4 px-6 outline-none focus:ring-2 focus:ring-indigo-500 transition-all disabled:opacity-50"
             />
             <button

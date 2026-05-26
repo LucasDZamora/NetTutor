@@ -92,6 +92,7 @@ function App() {
   <ChatView 
     key={user ? user.email : 'invitado'} // Si user cambia, el chat SE REINICIA sí o sí
     currentUser={user} // Pasamos el usuario como prop para mayor seguridad
+    switchView={setActiveView}
   />
 )}
   

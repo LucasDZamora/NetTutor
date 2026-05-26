@@ -182,6 +182,19 @@ async def delete_chat_history(email: str, nodo_actual: str = "inicio"):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/chat/progress/{email}")
+async def get_user_progress(email: str):
+    if not app_state["is_ready"]:
+        raise HTTPException(status_code=503, detail="Sistema en inicialización.")
+    try:
+        from app.services.chat_service import obtener_progreso_usuario
+        id_sesion = obtener_o_crear_sesion(email)
+        progreso = obtener_progreso_usuario(id_sesion)
+        return {"status": "success", "progreso": progreso}
+    except Exception as e:
+        print(f"Error en get_user_progress: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
     if not app_state["is_ready"]:
@@ -197,20 +210,31 @@ async def chat_endpoint(request: ChatRequest):
             for m in historial_db
             if m["nodo"] == request.nodo_actual
         ]
+        
         if request.nodo_actual == "analisis_pcap":
             pcap_data = app_state["pcaps"].get(id_sesion)
             if not pcap_data:
                 raise HTTPException(status_code=400, detail="No hay datos de PCAP en memoria para esta sesión. Sube el archivo nuevamente.")
             result = get_pcap_analysis_response(pcap_data, history=historial_nodo, user_message=request.message)
+            progreso_data = None
         else:
-            result = get_tutor_response(request.message, history=historial_nodo)
+            result = get_tutor_response(request.message, history=historial_nodo, id_sesion=id_sesion)
+            progreso_data = result.get("progreso")
             
         response_text = result["response"]
         router_debug = result["router"]
 
         guardar_mensaje_db(id_sesion, "assistant", response_text, request.nodo_actual)
 
-        return {"status": "success", "response": response_text, "router": router_debug}
+        res_body = {
+            "status": "success", 
+            "response": response_text, 
+            "router": router_debug
+        }
+        if progreso_data:
+            res_body["progreso"] = progreso_data
+
+        return res_body
     except Exception as e:
         print(f"Error en chat_endpoint: {e}")
         raise HTTPException(status_code=500, detail=str(e))
