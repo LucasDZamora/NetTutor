@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 export default function AnalysisView() {
   const [messages, setMessages] = useState([]);
@@ -223,12 +225,18 @@ export default function AnalysisView() {
               )}
 
               {(m.role === 'user' || m.role === 'assistant') && (
-                <div className={`max-w-[80%] p-4 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
+                <div className={`max-w-[80%] p-4 rounded-2xl text-sm leading-relaxed ${
                   m.role === 'user'
-                    ? 'bg-indigo-600 text-white shadow-md rounded-tr-none'
+                    ? 'bg-indigo-600 text-white shadow-md rounded-tr-none whitespace-pre-wrap'
                     : 'bg-white border border-gray-200 text-gray-800 shadow-sm rounded-tl-none'
                 }`}>
-                  {m.content}
+                  {m.role === 'user' ? (
+                    m.content
+                  ) : (
+                    <div className="chat-markdown">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                    </div>
+                  )}
                 </div>
               )}
 

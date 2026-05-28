@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 export default function ChatView({ currentUser, switchView }) {
   const [messages, setMessages] = useState([]);
@@ -392,12 +394,18 @@ export default function ChatView({ currentUser, switchView }) {
 
             return (
               <div key={i} className={`flex ${isUser ? 'justify-end' : 'justify-start'} animate-fade-in`}>
-                <div className={`max-w-[80%] p-4 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
+                <div className={`max-w-[80%] p-4 rounded-2xl text-sm leading-relaxed ${
                   isUser
                     ? 'bg-indigo-600 text-white shadow-md rounded-tr-none'
                     : 'bg-white border border-gray-200 text-gray-800 shadow-sm rounded-tl-none'
                 }`}>
-                  <div>{displayContent}</div>
+                  {isUser ? (
+                    <div className="whitespace-pre-wrap">{displayContent}</div>
+                  ) : (
+                    <div className="chat-markdown">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{displayContent}</ReactMarkdown>
+                    </div>
+                  )}
                   
                   {!isUser && (containsSim || containsPcap) && (
                     <div className="mt-4 pt-4 border-t border-gray-100 flex flex-col gap-2">

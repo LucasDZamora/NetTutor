@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 export default function SimulatorView() {
   const [currentLevel, setCurrentLevel] = useState(null);
@@ -249,7 +251,14 @@ export default function SimulatorView() {
                           : 'bg-indigo-600 text-white shadow-md'
                       }`}
                     >
-                      <strong>{msg.sender === 'User' ? 'Analista' : 'Tutor'}:</strong> {msg.text}
+                      <strong>{msg.sender === 'User' ? 'Analista' : 'Tutor'}:</strong>{' '}
+                      {msg.sender === 'User' ? (
+                        msg.text
+                      ) : (
+                        <span className="chat-markdown chat-markdown-dark inline-block w-full">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+                        </span>
+                      )}
                     </div>
                   </div>
                 ))}
