@@ -33,8 +33,12 @@ def obtener_o_crear_sesion(email_usuario: str):
         
         id_usuario_db = res_user.data[0]["id"]
 
-        # 3. Buscar sesión existente para este usuario
-        res_sesion = supabase.table("Sesion_aprendizaje").select("id_sesion").eq("id_usuario", id_usuario_db).execute()
+        # 3. Buscar sesión existente para este usuario y el nivel 0 (Chat General)
+        res_sesion = supabase.table("Sesion_aprendizaje")\
+            .select("id_sesion")\
+            .eq("id_usuario", id_usuario_db)\
+            .eq("id_nivel", 0)\
+            .execute()
         
         if res_sesion.data:
             return res_sesion.data[0]["id_sesion"]
@@ -74,7 +78,7 @@ def cargar_historial_db(id_sesion: int):
         res = supabase.table("Historial_chat")\
             .select("*")\
             .eq("id_sesion", id_sesion)\
-            .order("enviado_en", desc=False)\
+            .order("id_mensaje", desc=False)\
             .execute()
         
         historial_para_frontend = []
@@ -116,7 +120,7 @@ def obtener_progreso_usuario(id_sesion: int) -> dict:
             .select("contenido")\
             .eq("id_sesion", id_sesion)\
             .eq("nodo_pedagogico", "progreso_usuario")\
-            .order("enviado_en", desc=True)\
+            .order("id_mensaje", desc=True)\
             .limit(1)\
             .execute()
         

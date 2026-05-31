@@ -526,29 +526,55 @@ def get_tutor_response(
     }
 
     # 2. Router de intención con gpt-oss-120b
-    router_messages = [
-        {"role": "system", "content": SYSTEM_PROMPT_GENERAL_ROUTER},
-        {"role": "user", "content": f"MENSAJE ACTUAL:\n{user_message}"}
-    ]
-    if history:
-        historial_breve = history[-3:] if len(history) >= 3 else history
-        router_messages.insert(1, {"role": "system", "content": f"HISTORIAL RECIENTE:\n{json.dumps(historial_breve, ensure_ascii=False)}"})
-
-    intent_response = client.chat.completions.create(
-        model="openai/gpt-oss-120b",
-        messages=router_messages,
-        temperature=0.1,
-        response_format={"type": "json_object"}
+    mensaje_normalizado = user_message.lower().strip()
+    solicita_test = (
+        mensaje_normalizado == "/iniciar_mini_test" or
+        "iniciar_mini_test" in mensaje_normalizado or
+        "iniciar mini-test" in mensaje_normalizado or
+        "iniciar mini test" in mensaje_normalizado or
+        "comenzar mini-test" in mensaje_normalizado or
+        "comenzar mini test" in mensaje_normalizado or
+        "realizar el mini-test" in mensaje_normalizado or
+        "realizar el mini test" in mensaje_normalizado or
+        "comenzar_mini_test" in mensaje_normalizado
     )
 
-    raw_router = intent_response.choices[0].message.content.strip()
-    router_json = safe_json_loads(raw_router)
-    
-    diagnostic_eval = router_json.get("diagnostic_evaluation", "unknown")
-    user_understands = router_json.get("user_demonstrates_understanding", False)
+    if solicita_test:
+        router_json = {
+            "intent": "general_chat",
+            "topic": progreso.get("current_topic", "general"),
+            "needs_rag": False,
+            "summary": "El usuario solicita iniciar el mini-test",
+            "diagnostic_evaluation": "unknown",
+            "user_demonstrates_understanding": False
+        }
+        diagnostic_eval = "unknown"
+        user_understands = False
+        topic = progreso.get("current_topic", "general")
+    else:
+        router_messages = [
+            {"role": "system", "content": SYSTEM_PROMPT_GENERAL_ROUTER},
+            {"role": "user", "content": f"MENSAJE ACTUAL:\n{user_message}"}
+        ]
+        if history:
+            historial_breve = history[-3:] if len(history) >= 3 else history
+            router_messages.insert(1, {"role": "system", "content": f"HISTORIAL RECIENTE:\n{json.dumps(historial_breve, ensure_ascii=False)}"})
 
-    raw_topic = router_json.get("topic", "general")
-    topic = normalize_topic(raw_topic)
+        intent_response = client.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=router_messages,
+            temperature=0.1,
+            response_format={"type": "json_object"}
+        )
+
+        raw_router = intent_response.choices[0].message.content.strip()
+        router_json = safe_json_loads(raw_router)
+        
+        diagnostic_eval = router_json.get("diagnostic_evaluation", "unknown")
+        user_understands = router_json.get("user_demonstrates_understanding", False)
+
+        raw_topic = router_json.get("topic", "general")
+        topic = normalize_topic(raw_topic)
 
     # 3. Máquina de Estados Pedagógica (Ruta Adaptativa)
     DIAGNOSTIC_QUESTIONS = [
@@ -603,8 +629,10 @@ def get_tutor_response(
                 stage_instructions = f"""
                 Estás en la prueba de Diagnóstico Global Inicial. Estás evaluando la pregunta {step} de 5.
                 
-                1. Agradece o da un feedback extremadamente breve y profesional (ej: "Entendido.", "Listo, anotado.", "Comprendo tu punto.") sobre su respuesta a la pregunta del tema anterior ({prev_topic_display}). NO des explicaciones técnicas ni lecciones en este punto.
-                2. Presenta textualmente la siguiente pregunta diagnóstica:
+                REGLAS ABSOLUTAS DE ESTA ETAPA (DIAGNÓSTICO):
+                1. Da un acuse de recibo de la respuesta anterior extremadamente breve, conciso y profesional, en una sola línea o frase corta (ej: "Entendido.", "Listo, respuesta registrada.", "Perfecto, anotado.").
+                2. TIENES ESTRICTAMENTE PROHIBIDO dar explicaciones técnicas, respuestas correctas, lecciones o teoría en este punto. No expliques el tema anterior bajo ninguna circunstancia. Tu respuesta debe limitarse exclusivamente a registrar la respuesta anterior y formular la siguiente pregunta.
+                3. Presenta textualmente la siguiente pregunta diagnóstica:
                    "**Pregunta {step + 1}: {TOPIC_DISPLAY_NAMES[CURRICULUM_TOPICS[step]]}**
                    {DIAGNOSTIC_QUESTIONS[step]}"
                 """
@@ -636,10 +664,13 @@ def get_tutor_response(
                 stage_instructions = f"""
                 ¡El diagnóstico global ha finalizado!
                 
-                1. Informa de forma ejecutiva al estudiante sobre los resultados de su evaluación diagnóstica. Menciónale que dominó los temas: **{completed_str}** (los cuales se marcan como aprobados en su stepper superior), pero que nos enfocaremos en sus áreas de oportunidad.
-                2. El tema activo para comenzar su enseñanza personalizada es: **{display_active}**.
-                3. Inicia directamente la lección de este tema, explicando los conceptos clave de manera estructurada y profesional (puedes apoyarte en la información del RAG).
-                4. Haz una pregunta abierta corta para involucrarlo.
+                REGLAS ABSOLUTAS DE ESTA ETAPA (FIN DE DIAGNÓSTICO):
+                1. Informa al estudiante de forma ejecutiva sobre sus resultados: dominó los temas: **{completed_str}** (los cuales se marcan como aprobados ✓ en su panel izquierdo), pero que nos enfocaremos en sus áreas de oportunidad.
+                2. Inicia INMEDIATAMENTE y de forma proactiva con la primera lección teórica del tema pendiente: **{display_active}**.
+                3. Explica los conceptos clave de **{display_active}** de manera atractiva, estructurada y muy clara, apoyándote en el contexto del RAG.
+                4. Haz una pregunta corta para iniciar la conversación sobre este tema activo.
+                5. TIENES ESTRICTAMENTE PROHIBIDO despedirse, cerrar la conversación, recomendar ir al simulador de ataques o al análisis PCAP, o sugerir que la tutoría termina aquí. Tu deber como tutor es enganchar al estudiante activamente en su primera lección.
+                6. TIENES ESTRICTAMENTE PROHIBIDO incluir marcas de recomendación como `[RECOMENDACION:...]` en esta respuesta.
                 """
 
     elif progreso["stage"] == "teaching":
@@ -647,9 +678,9 @@ def get_tutor_response(
         current_topic = progreso["current_topic"]
         display_active = TOPIC_DISPLAY_NAMES[current_topic]
         
-        # Si ya interactuó suficiente en enseñanza (2 turnos) o el router detecta que responde adecuadamente,
-        # pasamos al Mini-Test de 3 preguntas.
-        if progreso["topic_messages_count"] >= 2 or user_understands or router_json.get("intent") == "answer_diagnostic":
+        # El mini-test ya no se inicia automáticamente por número de mensajes para no interrumpir al estudiante.
+        # Se inicia determinísticamente cuando se solicita_test (ej. al presionar el botón)
+        if solicita_test:
             progreso["stage"] = "mini_test"
             progreso["test_step"] = 0
             
@@ -703,7 +734,7 @@ def get_tutor_response(
             2. Corrige cualquier duda técnica o error que haya mostrado en su mensaje actual.
             3. TIENES ESTRICTAMENTE PROHIBIDO incluir marcas de recomendación como `[RECOMENDACION:SIMULADOR:...]` o `[RECOMENDACION:PCAP]`. Las recomendaciones están estrictamente prohibidas en la fase de enseñanza.
             4. TIENES ESTRICTAMENTE PROHIBIDO sugerir cambiar de tema o avanzar a otros temas (como Phishing). Concéntrate exclusivamente en '{display_active}'.
-            5. Adviértele de forma amigable que una vez cubiertas las explicaciones, le harás un **Mini-Test de 3 preguntas rápidas** para validar su aprendizaje y poder avanzar.
+            5. Adviértele de forma amigable que cuando se sienta listo, puede iniciar el **Mini-Test de 3 preguntas rápidas** presionando el botón 'Iniciar Mini-Test' en la interfaz o pidiéndote expresamente que comience el test.
             6. Termina preguntándole si tiene alguna duda técnica sobre el concepto o si está listo para comenzar el **Mini-Test**.
             """
 
@@ -844,8 +875,16 @@ def get_tutor_response(
     # 5. Obtener contexto RAG
     rag_context = ""
     active_topic = progreso["current_topic"] or topic
-    if router_json.get("needs_rag", True):
-        rag_context = rag.get_knowledge(user_message, topic=active_topic)
+    if progreso["stage"] == "global_diagnostic":
+        # Durante el diagnóstico, no queremos RAG en absoluto para mantener respuestas cortas y concisas
+        rag_context = ""
+    elif router_json.get("needs_rag", True):
+        # Si acabamos de pasar a teaching, consultamos con el nombre del tema para traer la introducción correcta
+        query_text = user_message
+        if progreso["stage"] == "teaching" and progreso["topic_messages_count"] == 0:
+            query_text = f"Conceptos básicos e introducción a {active_topic}"
+        
+        rag_context = rag.get_knowledge(query_text, topic=active_topic)
 
     pcap_context = f"Datos de Scapy: {pcap_data}" if pcap_data else "No hay archivo subido aún."
 
