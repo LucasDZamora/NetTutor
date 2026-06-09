@@ -1,8 +1,6 @@
 import os
 import shutil
 import threading
-import logging
-from groq import Groq
 from contextlib import asynccontextmanager
 from pathlib import Path
 from pydantic import BaseModel
@@ -11,8 +9,6 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 load_dotenv(BASE_DIR / ".env")
@@ -40,8 +36,8 @@ class LoginRequest(BaseModel):
 
 class RegisterRequest(BaseModel):
     nombre: str
-    correo: str  # Cambiado de 'email' a 'correo'
-    clave: str
+    email: str
+    password: str
 
 class SimulatorRequest(BaseModel):
     email: str
@@ -104,6 +100,10 @@ app.add_middleware(
 CAPTURES_DIR = BASE_DIR / "data" / "captures"
 CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
 
+@app.get("/")
+def read_root():
+    return {"message": "Tutor de Ciberseguridad Activo"}
+
 @app.get("/api/status")
 async def get_status():
     return {
@@ -122,14 +122,9 @@ async def login_endpoint(credentials: LoginRequest):
 
 @app.post("/api/register")
 async def register_endpoint(user_data: RegisterRequest):
-    # Pasamos las propiedades correctas del objeto user_data
-    nuevo_usuario = registrar_usuario(user_data.nombre, user_data.correo, user_data.clave)
-    
+    nuevo_usuario = registrar_usuario(user_data.nombre, user_data.email, user_data.password)
     if not nuevo_usuario:
-        # En vez de romper con HTTPException 400 que asusta al frontend, 
-        # devolvemos un JSON controlado con estado 200 para que se vea el mensaje real
-        return {"status": "error", "message": "El correo ya existe o hubo un problema en la base de datos."}
-        
+        raise HTTPException(status_code=400, detail="El correo ya existe o hubo un error")
     return {"status": "success", "message": "Usuario creado correctamente"}
 
 @app.get("/api/scenario/{nivel_id}")
@@ -280,30 +275,3 @@ async def analyze_endpoint(email: str, file: UploadFile = File(...), nodo_actual
     finally:
         if file_path.exists():
             file_path.unlink()
-
-# --- INTEGRACIÓN DEL FRONTEND EN PRODUCCIÓN ---
-
-# 1. Rutas absolutas basadas en la estructura real del contenedor (/code)
-FRONTEND_ASSETS = Path("/code/Frontend/dist/assets")
-FRONTEND_INDEX = Path("/code/Frontend/dist/index.html")
-
-# Si encuentra la carpeta assets, la monta
-if FRONTEND_ASSETS.exists():
-    app.mount("/assets", StaticFiles(directory=str(FRONTEND_ASSETS)), name="assets")
-
-# 2. Capturador comodín (Fallback)
-@app.get("/{catchall:path}")
-async def serve_frontend(catchall: str):
-    # Permitir que la API y la documentación sigan respondiendo de forma normal
-    if catchall.startswith("api") or catchall.startswith("docs") or catchall.startswith("openapi.json") or catchall.startswith("redoc"):
-        return None
-        
-    # Entregar el index.html de React si existe en la ruta absoluta
-    if FRONTEND_INDEX.exists():
-        return FileResponse(str(FRONTEND_INDEX))
-    
-    # Si sigue sin encontrarlo, te dirá exactamente en qué ruta lo buscó para diagnosticarlo
-    return {
-        "message": "Backend Activo",
-        "error": f"No se encontró el index.html en la ruta esperada: {FRONTEND_INDEX}"
-    }
